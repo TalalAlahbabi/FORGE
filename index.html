@@ -30,6 +30,9 @@
     <meta name="format-detection" content="telephone=no">
 
     <link rel="stylesheet" href="style.css">
+
+    <!-- Supabase SDK (cloud sync) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="light">
 
@@ -110,6 +113,10 @@
         </nav>
 
         <div class="sidebar-footer">
+            <div class="auth-pill" id="authPill" onclick="handleAuthPillClick()">
+                <span class="auth-pill-icon" id="authPillIcon">☁</span>
+                <span class="auth-pill-text" id="authPillText">Sign in to sync</span>
+            </div>
             <button class="theme-toggle" onclick="toggleDark()" id="themeBtn">Light</button>
             <div class="streak-badge" id="sidebarStreak">🔥 0 day streak</div>
         </div>
@@ -1023,6 +1030,65 @@
     </div>
     <div class="install-banner-actions">
         <button class="install-banner-close" onclick="dismissIOSBanner()" aria-label="Dismiss">✕</button>
+    </div>
+</div>
+
+<!-- ===== AUTH MODAL ===== -->
+<div class="modal-backdrop" id="authModal" onclick="if(event.target===this)closeAuthModal()">
+    <div class="modal auth-modal">
+        <div class="modal-header">
+            <div>
+                <div class="modal-title" id="authModalTitle">Sign in to FORGE</div>
+                <div class="modal-sub" id="authModalSub">Sync your training across all your devices.</div>
+            </div>
+            <button class="modal-close" onclick="closeAuthModal()">✕</button>
+        </div>
+
+        <div class="auth-tabs">
+            <button class="auth-tab active" id="authTabSignIn" onclick="switchAuthTab('signin')">Sign in</button>
+            <button class="auth-tab" id="authTabSignUp" onclick="switchAuthTab('signup')">Create account</button>
+        </div>
+
+        <div class="form-stack">
+            <div class="field">
+                <label>Email</label>
+                <input type="email" id="authEmail" placeholder="you@example.com" autocomplete="email">
+            </div>
+            <div class="field">
+                <label>Password</label>
+                <input type="password" id="authPassword" placeholder="At least 6 characters" autocomplete="current-password">
+            </div>
+            <p class="helper-text" id="authMessage"></p>
+            <div class="btn-row">
+                <button class="pill-btn full" id="authSubmitBtn" onclick="submitAuth()">Sign in</button>
+            </div>
+        </div>
+
+        <div class="auth-footer">
+            <p class="muted" style="font-size: 12px; text-align: center; margin-top: 16px;">
+                Your data syncs securely. You can keep using FORGE offline anytime.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- ===== MIGRATE DATA MODAL ===== -->
+<div class="modal-backdrop" id="migrateModal" onclick="event.stopPropagation()">
+    <div class="modal">
+        <div class="modal-header">
+            <div>
+                <div class="modal-title">Upload your training data?</div>
+                <div class="modal-sub">We found existing data on this device.</div>
+            </div>
+        </div>
+        <div id="migrateDetails" class="migrate-details"></div>
+        <p class="helper-text">You can upload this to your new account so it's available on every device. Or skip and start fresh — your local data stays here either way.</p>
+        <div class="btn-row" style="margin-top: 16px">
+            <button class="pill-btn full" onclick="runMigration(true)">Upload my data</button>
+        </div>
+        <div class="btn-row" style="margin-top: 8px">
+            <button class="pill-btn outline full" onclick="runMigration(false)">Start fresh on this account</button>
+        </div>
     </div>
 </div>
 
