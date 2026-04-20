@@ -4349,3 +4349,150 @@ body.standalone-app * {
     }
 }
 
+
+/* =========================================================
+   ============= AUTH + CLOUD SYNC STYLES ==================
+   ========================================================= */
+
+/* ===== SIDEBAR AUTH PILL ===== */
+.auth-pill {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--card-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-2);
+    transition: all 0.2s var(--ease);
+    user-select: none;
+}
+
+.auth-pill:hover {
+    background: var(--card-hover);
+    border-color: var(--card-border-strong);
+    color: var(--text);
+}
+
+.auth-pill.signed-in {
+    background: var(--primary-soft);
+    border-color: var(--primary-dim);
+    color: var(--primary);
+}
+
+.auth-pill.signed-in:hover {
+    background: var(--primary-dim);
+}
+
+.auth-pill.syncing {
+    background: var(--card-2);
+    color: var(--muted);
+}
+
+.auth-pill-icon {
+    font-size: 15px;
+    flex-shrink: 0;
+}
+
+.auth-pill-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.auth-pill.syncing .auth-pill-icon {
+    animation: authSpin 1s linear infinite;
+}
+
+@keyframes authSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* ===== AUTH MODAL ===== */
+.auth-modal {
+    max-width: 420px;
+}
+
+.auth-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--card-2);
+    padding: 4px;
+    border-radius: var(--radius-pill);
+    margin-bottom: 20px;
+}
+
+.auth-tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 9px 16px;
+    border-radius: var(--radius-pill);
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.25s var(--ease);
+    letter-spacing: -0.01em;
+}
+
+.auth-tab:hover {
+    color: var(--text);
+}
+
+.auth-tab.active {
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 600;
+    box-shadow: var(--shadow-xs);
+}
+
+#authMessage {
+    min-height: 18px;
+    transition: color 0.2s var(--ease);
+}
+
+#authMessage.error {
+    color: var(--danger);
+    font-weight: 500;
+}
+
+#authMessage.success {
+    color: var(--success);
+    font-weight: 500;
+}
+
+.auth-footer {
+    margin-top: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--divider);
+}
+
+/* ===== MIGRATE MODAL ===== */
+.migrate-details {
+    background: var(--card-2);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    margin: 12px 0 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-2);
+}
+
+.migrate-stat {
+    display: flex;
+    justify-content: space-between;
+}
+
+.migrate-stat-count {
+    font-weight: 700;
+    color: var(--primary);
+    font-variant-numeric: tabular-nums;
+}
