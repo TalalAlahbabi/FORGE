@@ -3454,3 +3454,590 @@ if (document.readyState === "loading") {
 } else {
     setTimeout(initNewFeatures, 50)
 }
+
+/* =========================================================
+   ============= SUPABASE CLOUD SYNC =======================
+   ========================================================= */
+
+// ===== CONFIG =====
+const SUPABASE_URL = "https://eyvhyyshiwuiveycnlux.supabase.co"
+const SUPABASE_KEY = "sb_publishable_9vufsThorZ8iCGWzRGasyg_TmMwtbt9"
+
+// Lazy init: only create client when SDK loads (after network)
+let supabase = null
+let currentUser = null   // null if signed out
+let syncInFlight = false
+let lastSyncAt = null
+
+function initSupabase() {
+    if (supabase) return supabase
+    if (typeof window === "undefined" || !window.supabase) return null
+    try {
+        supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+            auth: {
+                persistSession: true,
+                autoRefreshToken: true,
+                detectSessionInUrl: false,
+                storage: window.localStorage,
+                storageKey: "forge_sb_session"
+            }
+        })
+        // Listen for auth changes
+        supabase.auth.onAuthStateChange((event, session) => {
+            currentUser = session?.user || null
+            updateAuthPill()
+            if (event === "SIGNED_IN") {
+                onSignedIn()
+            } else if (event === "SIGNED_OUT") {
+                onSignedOut()
+            }
+        })
+        // Check for existing session on load
+        supabase.auth.getSession().then(({ data }) => {
+            currentUser = data?.session?.user || null
+            updateAuthPill()
+            if (currentUser) {
+                // Silently pull latest data on app start
+                setTimeout(() => cloudPullAll().catch(() => {}), 500)
+            }
+        })
+        return supabase
+    } catch (e) {
+        console.error("Supabase init failed:", e)
+        return null
+    }
+}
+
+// ===== UI: AUTH PILL =====
+function updateAuthPill() {
+    const pill = document.getElementById("authPill")
+    const icon = document.getElementById("authPillIcon")
+    const text = document.getElementById("authPillText")
+    if (!pill || !icon || !text) return
+
+    if (currentUser) {
+        pill.classList.add("signed-in")
+        pill.classList.remove("syncing")
+        icon.textContent = "✓"
+        const email = currentUser.email || "Signed in"
+        text.textContent = email.length > 20 ? email.slice(0, 18) + "…" : email
+        pill.title = `Signed in as ${email} — click to manage`
+    } else {
+        pill.classList.remove("signed-in", "syncing")
+        icon.textContent = "☁"
+        text.textContent = "Sign in to sync"
+        pill.title = "Sign in to sync across devices"
+    }
+}
+
+function setAuthPillSyncing(isSyncing) {
+    const pill = document.getElementById("authPill")
+    const icon = document.getElementById("authPillIcon")
+    const text = document.getElementById("authPillText")
+    if (!pill) return
+    if (isSyncing) {
+        pill.classList.add("syncing")
+        if (icon) icon.textContent = "↻"
+        if (text) text.textContent = "Syncing…"
+    } else {
+        pill.classList.remove("syncing")
+        updateAuthPill()
+    }
+}
+
+function handleAuthPillClick() {
+    if (currentUser) {
+        // Show a menu: sync now / sign out
+        const doSignOut = confirm(`Signed in as ${currentUser.email}\n\nSign out? Your local data will stay on this device.`)
+        if (doSignOut) signOut()
+    } else {
+        openAuthModal("signin")
+    }
+}
+
+// ===== UI: AUTH MODAL =====
+let authTab = "signin"
+
+function openAuthModal(tab = "signin") {
+    authTab = tab
+    switchAuthTab(tab)
+    // Clear inputs
+    const emailEl = document.getElementById("authEmail")
+    const pwEl = document.getElementById("authPassword")
+    const msgEl = document.getElementById("authMessage")
+    if (emailEl) emailEl.value = ""
+    if (pwEl) pwEl.value = ""
+    if (msgEl) { msgEl.textContent = ""; msgEl.className = "helper-text" }
+    openModal("authModal")
+    // Focus email
+    setTimeout(() => document.getElementById("authEmail")?.focus(), 100)
+}
+
+function closeAuthModal() { closeModal("authModal") }
+
+function switchAuthTab(tab) {
+    authTab = tab
+    const signInTab = document.getElementById("authTabSignIn")
+    const signUpTab = document.getElementById("authTabSignUp")
+    const submitBtn = document.getElementById("authSubmitBtn")
+    const title = document.getElementById("authModalTitle")
+    const sub = document.getElementById("authModalSub")
+    const pwEl = document.getElementById("authPassword")
+
+    if (tab === "signin") {
+        signInTab?.classList.add("active")
+        signUpTab?.classList.remove("active")
+        if (submitBtn) submitBtn.textContent = "Sign in"
+        if (title) title.textContent = "Sign in to FORGE"
+        if (sub) sub.textContent = "Sync your training across all your devices."
+        if (pwEl) pwEl.autocomplete = "current-password"
+    } else {
+        signInTab?.classList.remove("active")
+        signUpTab?.classList.add("active")
+        if (submitBtn) submitBtn.textContent = "Create account"
+        if (title) title.textContent = "Create your FORGE account"
+        if (sub) sub.textContent = "Free forever. Your data stays yours."
+        if (pwEl) pwEl.autocomplete = "new-password"
+    }
+    const msgEl = document.getElementById("authMessage")
+    if (msgEl) { msgEl.textContent = ""; msgEl.className = "helper-text" }
+}
+
+async function submitAuth() {
+    const emailEl = document.getElementById("authEmail")
+    const pwEl = document.getElementById("authPassword")
+    const msgEl = document.getElementById("authMessage")
+    const btn = document.getElementById("authSubmitBtn")
+    if (!emailEl || !pwEl || !msgEl) return
+
+    const email = emailEl.value.trim()
+    const password = pwEl.value
+
+    if (!email || !email.includes("@")) {
+        showAuthMessage("Enter a valid email", "error")
+        return
+    }
+    if (!password || password.length < 6) {
+        showAuthMessage("Password must be at least 6 characters", "error")
+        return
+    }
+
+    if (!initSupabase()) {
+        showAuthMessage("Cloud sync unavailable — check your connection", "error")
+        return
+    }
+
+    btn.disabled = true
+    btn.textContent = authTab === "signin" ? "Signing in…" : "Creating account…"
+    showAuthMessage("", "")
+
+    try {
+        let result
+        if (authTab === "signin") {
+            result = await supabase.auth.signInWithPassword({ email, password })
+        } else {
+            result = await supabase.auth.signUp({ email, password })
+        }
+
+        if (result.error) {
+            showAuthMessage(friendlyAuthError(result.error.message), "error")
+            btn.disabled = false
+            btn.textContent = authTab === "signin" ? "Sign in" : "Create account"
+            return
+        }
+
+        if (authTab === "signup" && !result.data?.session) {
+            // Email confirmation required
+            showAuthMessage("Check your email for a confirmation link.", "success")
+            btn.disabled = false
+            btn.textContent = "Create account"
+            return
+        }
+
+        // Success!
+        showAuthMessage("Success 🎉", "success")
+        setTimeout(() => closeAuthModal(), 600)
+    } catch (e) {
+        showAuthMessage(friendlyAuthError(e.message), "error")
+        btn.disabled = false
+        btn.textContent = authTab === "signin" ? "Sign in" : "Create account"
+    }
+}
+
+function showAuthMessage(msg, kind) {
+    const el = document.getElementById("authMessage")
+    if (!el) return
+    el.textContent = msg
+    el.className = "helper-text" + (kind ? " " + kind : "")
+}
+
+function friendlyAuthError(raw) {
+    const s = (raw || "").toLowerCase()
+    if (s.includes("invalid login")) return "Wrong email or password."
+    if (s.includes("already registered")) return "Account exists — try Sign in instead."
+    if (s.includes("email not confirmed")) return "Check your email to confirm your account."
+    if (s.includes("invalid email")) return "That email doesn't look right."
+    if (s.includes("password should be at least")) return "Password must be at least 6 characters."
+    if (s.includes("rate limit") || s.includes("too many")) return "Too many attempts — try again in a minute."
+    if (s.includes("network") || s.includes("fetch")) return "Network issue — check your connection."
+    return raw || "Something went wrong."
+}
+
+async function signOut() {
+    if (!supabase) return
+    try {
+        await supabase.auth.signOut()
+        toast("Signed out — your local data is preserved", "info")
+    } catch (e) {
+        console.warn("Sign out error:", e)
+    }
+}
+
+// ===== LIFECYCLE: called when sign-in/out events fire =====
+async function onSignedIn() {
+    if (!currentUser) return
+    toast(`Welcome back`, "success")
+    // Decide: migrate or pull
+    const hasLocalData = workouts.length > 0 || measurements.length > 0 || goals.length > 0 || photos.length > 0
+    const hasMigratedFlag = localStorage.getItem(`forge_migrated_${currentUser.id}`) === "1"
+
+    if (hasLocalData && !hasMigratedFlag) {
+        // Show migration modal
+        showMigrateModal()
+    } else {
+        // Just pull latest
+        setTimeout(() => cloudPullAll().catch(e => {
+            console.warn("Initial pull failed:", e)
+            toast("Couldn't sync from cloud", "warn")
+        }), 400)
+    }
+}
+
+function onSignedOut() {
+    toast("Signed out", "info")
+}
+
+// ===== MIGRATE LOCAL DATA TO CLOUD =====
+function showMigrateModal() {
+    const detailsEl = document.getElementById("migrateDetails")
+    if (!detailsEl) return
+
+    const counts = {
+        Workouts: workouts.length,
+        Measurements: measurements.length,
+        "Progress photos": photos.length,
+        Goals: goals.length,
+        "Food entries": Object.values(foodLog).reduce((a, b) => a + (b?.length || 0), 0),
+        "Earned badges": Object.keys(earnedBadges).length,
+    }
+
+    detailsEl.innerHTML = Object.entries(counts)
+        .filter(([_, v]) => v > 0)
+        .map(([k, v]) => `<div class="migrate-stat"><span>${k}</span><span class="migrate-stat-count">${v}</span></div>`)
+        .join("") || `<p class="muted">No data to upload.</p>`
+
+    openModal("migrateModal")
+}
+
+async function runMigration(doUpload) {
+    closeModal("migrateModal")
+    if (!currentUser) return
+    localStorage.setItem(`forge_migrated_${currentUser.id}`, "1")
+
+    if (!doUpload) {
+        // User chose fresh start — pull cloud data (which may be empty)
+        await cloudPullAll().catch(() => {})
+        return
+    }
+
+    setAuthPillSyncing(true)
+    try {
+        await cloudPushAll()
+        toast("Data uploaded to cloud 🎉", "success")
+    } catch (e) {
+        console.error("Migration failed:", e)
+        toast("Upload failed — will retry later", "warn")
+    } finally {
+        setAuthPillSyncing(false)
+    }
+}
+
+// ===== CLOUD PUSH: upload all local data to user's account =====
+async function cloudPushAll() {
+    if (!currentUser || !supabase) return
+
+    // 1. Profile
+    await supabase.from("user_profiles").upsert({
+        user_id: currentUser.id,
+        display_name: profile.name || null,
+        age: profile.age,
+        sex: profile.sex || null,
+        height_cm: profile.height,
+        units: profile.units || "metric",
+        training_since: profile.trainingSince || null,
+        injuries: profile.injuries || [],
+        rest_timer_sec: profile.restTimer || 90,
+        voice_on: profile.voice === "on",
+        notif_on: profile.notif === "on",
+        selected_plan: selectedPlanName || null,
+        current_plan: currentPlan || null,
+        updated_at: new Date().toISOString()
+    }, { onConflict: "user_id" })
+
+    // 2. Workouts — add client_id for dedupe
+    if (workouts.length > 0) {
+        const rows = workouts.map((w, i) => ({
+            user_id: currentUser.id,
+            date: w.date,
+            day: w.day,
+            exercise: w.exercise,
+            weight: w.weight != null ? Number(w.weight) : null,
+            reps: w.reps != null ? Number(w.reps) : null,
+            sets: w.sets != null ? Number(w.sets) : null,
+            rpe: w.rpe != null ? Number(w.rpe) : null,
+            e1rm: w.e1rm != null ? Number(w.e1rm) : null,
+            notes: w.notes || null,
+            rating: w.rating != null ? Number(w.rating) : null,
+            energy: w.energy != null ? Number(w.energy) : null,
+            client_id: w.client_id || `local-${w.date}-${w.day}-${w.exercise}-${i}`.replace(/\s+/g, "_")
+        }))
+        // Upsert in chunks of 200
+        for (let i = 0; i < rows.length; i += 200) {
+            const chunk = rows.slice(i, i + 200)
+            const { error } = await supabase.from("workouts").upsert(chunk, { onConflict: "user_id,client_id", ignoreDuplicates: false })
+            if (error) throw error
+        }
+    }
+
+    // 3. Measurements
+    if (measurements.length > 0) {
+        const rows = measurements.map((m, i) => ({
+            user_id: currentUser.id,
+            date: m.date,
+            weight_kg: m.weight,
+            body_fat_pct: m.bf,
+            waist_cm: m.waist,
+            chest_cm: m.chest,
+            arm_cm: m.arm,
+            thigh_cm: m.thigh,
+            client_id: m.client_id || `local-m-${m.id || i}`
+        }))
+        const { error } = await supabase.from("measurements").upsert(rows, { onConflict: "user_id,client_id" })
+        if (error) throw error
+    }
+
+    // 4. Goals
+    if (goals.length > 0) {
+        const rows = goals.map((g, i) => ({
+            user_id: currentUser.id,
+            title: g.title,
+            goal_type: g.type,
+            exercise: g.exercise || null,
+            target_val: g.target,
+            deadline: g.deadline,
+            status: g.status || "active",
+            created_weight: g.createdWeight,
+            client_id: g.client_id || `local-g-${g.id || i}`
+        }))
+        const { error } = await supabase.from("goals").upsert(rows, { onConflict: "user_id,client_id" })
+        if (error) throw error
+    }
+
+    // 5. Food log — flatten
+    const foodRows = []
+    Object.entries(foodLog).forEach(([date, entries]) => {
+        entries.forEach((e, i) => {
+            foodRows.push({
+                user_id: currentUser.id,
+                date,
+                name: e.name,
+                kcal: e.kcal,
+                protein_g: e.p,
+                carbs_g: e.c,
+                fat_g: e.f,
+                client_id: e.client_id || `local-f-${date}-${i}`
+            })
+        })
+    })
+    if (foodRows.length > 0) {
+        for (let i = 0; i < foodRows.length; i += 200) {
+            const chunk = foodRows.slice(i, i + 200)
+            const { error } = await supabase.from("food_log").upsert(chunk, { onConflict: "user_id,client_id" })
+            if (error) throw error
+        }
+    }
+
+    // 6. Nutrition targets
+    if (nutritionTargets.kcal || nutritionTargets.p || nutritionTargets.c || nutritionTargets.f) {
+        await supabase.from("nutrition_targets").upsert({
+            user_id: currentUser.id,
+            kcal: nutritionTargets.kcal,
+            protein_g: nutritionTargets.p,
+            carbs_g: nutritionTargets.c,
+            fat_g: nutritionTargets.f,
+            updated_at: new Date().toISOString()
+        }, { onConflict: "user_id" })
+    }
+
+    // 7. Badges
+    const badgeRows = Object.entries(earnedBadges).map(([id, ts]) => ({
+        user_id: currentUser.id,
+        badge_id: id,
+        earned_at: ts
+    }))
+    if (badgeRows.length > 0) {
+        await supabase.from("earned_badges").upsert(badgeRows, { onConflict: "user_id,badge_id" })
+    }
+
+    lastSyncAt = new Date()
+}
+
+// ===== CLOUD PULL: download all user data =====
+async function cloudPullAll() {
+    if (!currentUser || !supabase) return
+    setAuthPillSyncing(true)
+    try {
+        // Profile
+        const { data: prof } = await supabase.from("user_profiles").select("*").eq("user_id", currentUser.id).maybeSingle()
+        if (prof) {
+            profile.name = prof.display_name || ""
+            profile.age = prof.age
+            profile.sex = prof.sex || ""
+            profile.height = prof.height_cm
+            profile.units = prof.units || "metric"
+            profile.trainingSince = prof.training_since || ""
+            profile.injuries = prof.injuries || []
+            profile.restTimer = prof.rest_timer_sec || 90
+            profile.voice = prof.voice_on ? "on" : "off"
+            profile.notif = prof.notif_on ? "on" : "off"
+            if (prof.selected_plan) selectedPlanName = prof.selected_plan
+            if (prof.current_plan) currentPlan = prof.current_plan
+        }
+
+        // Workouts
+        const { data: wo } = await supabase.from("workouts").select("*").eq("user_id", currentUser.id).order("date", { ascending: true })
+        if (wo) {
+            workouts = wo.map(r => ({
+                date: r.date,
+                day: r.day,
+                exercise: r.exercise,
+                weight: r.weight,
+                reps: r.reps,
+                sets: r.sets,
+                rpe: r.rpe,
+                e1rm: r.e1rm,
+                notes: r.notes,
+                rating: r.rating,
+                energy: r.energy,
+                client_id: r.client_id
+            }))
+        }
+
+        // Measurements
+        const { data: ms } = await supabase.from("measurements").select("*").eq("user_id", currentUser.id).order("date", { ascending: false })
+        if (ms) {
+            measurements = ms.map(r => ({
+                id: r.id,
+                date: r.date,
+                weight: r.weight_kg,
+                bf: r.body_fat_pct,
+                waist: r.waist_cm,
+                chest: r.chest_cm,
+                arm: r.arm_cm,
+                thigh: r.thigh_cm,
+                client_id: r.client_id
+            }))
+        }
+
+        // Goals
+        const { data: gs } = await supabase.from("goals").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false })
+        if (gs) {
+            goals = gs.map(r => ({
+                id: r.id,
+                type: r.goal_type,
+                title: r.title,
+                exercise: r.exercise,
+                target: r.target_val,
+                deadline: r.deadline,
+                status: r.status,
+                createdAt: r.created_at,
+                createdWeight: r.created_weight,
+                client_id: r.client_id
+            }))
+        }
+
+        // Food log — rebuild by date
+        const { data: fl } = await supabase.from("food_log").select("*").eq("user_id", currentUser.id).order("date", { ascending: false })
+        if (fl) {
+            const byDate = {}
+            fl.forEach(r => {
+                if (!byDate[r.date]) byDate[r.date] = []
+                byDate[r.date].push({
+                    name: r.name,
+                    kcal: r.kcal,
+                    p: r.protein_g,
+                    c: r.carbs_g,
+                    f: r.fat_g,
+                    time: r.created_at,
+                    client_id: r.client_id
+                })
+            })
+            foodLog = byDate
+        }
+
+        // Nutrition targets
+        const { data: nt } = await supabase.from("nutrition_targets").select("*").eq("user_id", currentUser.id).maybeSingle()
+        if (nt) {
+            nutritionTargets = { kcal: nt.kcal, p: nt.protein_g, c: nt.carbs_g, f: nt.fat_g }
+        }
+
+        // Badges
+        const { data: bg } = await supabase.from("earned_badges").select("*").eq("user_id", currentUser.id)
+        if (bg) {
+            earnedBadges = {}
+            bg.forEach(r => earnedBadges[r.badge_id] = r.earned_at)
+        }
+
+        // Persist locally
+        saveData()
+        lastSyncAt = new Date()
+
+        // Re-render active page
+        const active = document.querySelector(".page.active-page")
+        if (active) {
+            const id = active.id
+            const btn = document.querySelector(`[data-section="${id}"]`)
+            if (typeof navigate === "function") navigate(id, btn)
+        }
+    } finally {
+        setAuthPillSyncing(false)
+    }
+}
+
+// ===== HOOK: saveData → also push to cloud (debounced) =====
+let _cloudPushTimer = null
+const _origSaveData = (typeof saveData === "function") ? saveData : null
+if (_origSaveData) {
+    window.saveData = function() {
+        _origSaveData.apply(this, arguments)
+        if (currentUser && supabase) {
+            // Debounce: only push after 2 seconds of no more saves
+            if (_cloudPushTimer) clearTimeout(_cloudPushTimer)
+            _cloudPushTimer = setTimeout(() => {
+                cloudPushAll().catch(e => console.warn("Cloud push failed:", e))
+            }, 2000)
+        }
+    }
+}
+
+// ===== INIT =====
+function initCloudSync() {
+    initSupabase()
+    updateAuthPill()
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initCloudSync)
+} else {
+    setTimeout(initCloudSync, 100)
+}
