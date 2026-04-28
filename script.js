@@ -3697,15 +3697,16 @@ async function signOut() {
 async function onSignedIn() {
     if (!currentUser) return
     toast(`Welcome back`, "success")
-    // Decide: migrate or pull
+    // Decide: migrate or merge-sync
     const hasLocalData = workouts.length > 0 || measurements.length > 0 || goals.length > 0 || photos.length > 0
     const hasMigratedFlag = localStorage.getItem(`forge_migrated_${currentUser.id}`) === "1"
 
     if (hasLocalData && !hasMigratedFlag) {
-        // Show migration modal
+        // First time signing in on this device with local data → show migration modal
         showMigrateModal()
     } else {
-        // Just pull latest
+        // Already migrated OR fresh device with no local data — safe to merge-pull
+        // cloudPullAll is now merge-based, so it won't wipe local data even if cloud is empty
         setTimeout(() => cloudPullAll().catch(e => {
             console.warn("Initial pull failed:", e)
             toast("Couldn't sync from cloud", "warn")
@@ -3784,9 +3785,19 @@ async function cloudPushAll() {
         updated_at: new Date().toISOString()
     }, { onConflict: "user_id" })
 
-    // 2. Workouts — add client_id for dedupe
+    // 2. Workouts — ensure every record has a stable client_id, persist it locally too
     if (workouts.length > 0) {
-        const rows = workouts.map((w, i) => ({
+        // Assign stable client_ids to any workouts that lack one
+        workouts.forEach((w) => {
+            if (!w.client_id) {
+                // Use content-based ID so same workout generates same ID twice
+                w.client_id = `local-${w.date}-${w.day}-${w.exercise}-${w.weight||0}-${w.reps||0}-${w.sets||0}`.replace(/\s+/g, "_")
+            }
+        })
+        // Persist the IDs back to localStorage
+        localStorage.setItem("forge_workouts", JSON.stringify(workouts))
+
+        const rows = workouts.map(w => ({
             user_id: currentUser.id,
             date: w.date,
             day: w.day,
@@ -3799,7 +3810,7 @@ async function cloudPushAll() {
             notes: w.notes || null,
             rating: w.rating != null ? Number(w.rating) : null,
             energy: w.energy != null ? Number(w.energy) : null,
-            client_id: w.client_id || `local-${w.date}-${w.day}-${w.exercise}-${i}`.replace(/\s+/g, "_")
+            client_id: w.client_id
         }))
         // Upsert in chunks of 200
         for (let i = 0; i < rows.length; i += 200) {
@@ -3811,7 +3822,13 @@ async function cloudPushAll() {
 
     // 3. Measurements
     if (measurements.length > 0) {
-        const rows = measurements.map((m, i) => ({
+        measurements.forEach(m => {
+            if (!m.client_id) {
+                m.client_id = `local-m-${m.date}-${m.id || (m.weight||0) + '-' + (m.bf||0)}`
+            }
+        })
+        localStorage.setItem("forge_measurements", JSON.stringify(measurements))
+        const rows = measurements.map(m => ({
             user_id: currentUser.id,
             date: m.date,
             weight_kg: m.weight,
@@ -3820,7 +3837,7 @@ async function cloudPushAll() {
             chest_cm: m.chest,
             arm_cm: m.arm,
             thigh_cm: m.thigh,
-            client_id: m.client_id || `local-m-${m.id || i}`
+            client_id: m.client_id
         }))
         const { error } = await sbClient.from("measurements").upsert(rows, { onConflict: "user_id,client_id" })
         if (error) throw error
@@ -3828,7 +3845,13 @@ async function cloudPushAll() {
 
     // 4. Goals
     if (goals.length > 0) {
-        const rows = goals.map((g, i) => ({
+        goals.forEach(g => {
+            if (!g.client_id) {
+                g.client_id = `local-g-${g.id || g.title.replace(/\s+/g, '_') + '-' + (g.createdAt || '')}`
+            }
+        })
+        localStorage.setItem("forge_goals", JSON.stringify(goals))
+        const rows = goals.map(g => ({
             user_id: currentUser.id,
             title: g.title,
             goal_type: g.type,
@@ -3837,7 +3860,7 @@ async function cloudPushAll() {
             deadline: g.deadline,
             status: g.status || "active",
             created_weight: g.createdWeight,
-            client_id: g.client_id || `local-g-${g.id || i}`
+            client_id: g.client_id
         }))
         const { error } = await sbClient.from("goals").upsert(rows, { onConflict: "user_id,client_id" })
         if (error) throw error
@@ -3845,8 +3868,13 @@ async function cloudPushAll() {
 
     // 5. Food log — flatten
     const foodRows = []
+    let foodLogChanged = false
     Object.entries(foodLog).forEach(([date, entries]) => {
         entries.forEach((e, i) => {
+            if (!e.client_id) {
+                e.client_id = `local-f-${date}-${e.name.replace(/\s+/g,'_')}-${e.kcal||0}-${i}`
+                foodLogChanged = true
+            }
             foodRows.push({
                 user_id: currentUser.id,
                 date,
@@ -3855,10 +3883,11 @@ async function cloudPushAll() {
                 protein_g: e.p,
                 carbs_g: e.c,
                 fat_g: e.f,
-                client_id: e.client_id || `local-f-${date}-${i}`
+                client_id: e.client_id
             })
         })
     })
+    if (foodLogChanged) localStorage.setItem("forge_foodLog", JSON.stringify(foodLog))
     if (foodRows.length > 0) {
         for (let i = 0; i < foodRows.length; i += 200) {
             const chunk = foodRows.slice(i, i + 200)
@@ -3897,110 +3926,121 @@ async function cloudPullAll() {
     if (!currentUser || !sbClient) return
     setAuthPillSyncing(true)
     try {
-        // Profile
+        // ===== Profile (single row, ok to replace) =====
         const { data: prof } = await sbClient.from("user_profiles").select("*").eq("user_id", currentUser.id).maybeSingle()
         if (prof) {
-            profile.name = prof.display_name || ""
-            profile.age = prof.age
-            profile.sex = prof.sex || ""
-            profile.height = prof.height_cm
-            profile.units = prof.units || "metric"
-            profile.trainingSince = prof.training_since || ""
-            profile.injuries = prof.injuries || []
-            profile.restTimer = prof.rest_timer_sec || 90
-            profile.voice = prof.voice_on ? "on" : "off"
-            profile.notif = prof.notif_on ? "on" : "off"
-            if (prof.selected_plan) selectedPlanName = prof.selected_plan
-            if (prof.current_plan) currentPlan = prof.current_plan
+            // Only overwrite if cloud has meaningful data (not empty defaults)
+            if (prof.display_name || prof.age || prof.height_cm) {
+                profile.name = prof.display_name || profile.name || ""
+                profile.age = prof.age ?? profile.age
+                profile.sex = prof.sex || profile.sex || ""
+                profile.height = prof.height_cm ?? profile.height
+                profile.units = prof.units || profile.units || "metric"
+                profile.trainingSince = prof.training_since || profile.trainingSince || ""
+                profile.injuries = prof.injuries || profile.injuries || []
+                profile.restTimer = prof.rest_timer_sec || profile.restTimer || 90
+                profile.voice = prof.voice_on != null ? (prof.voice_on ? "on" : "off") : profile.voice
+                profile.notif = prof.notif_on != null ? (prof.notif_on ? "on" : "off") : profile.notif
+                if (prof.selected_plan) selectedPlanName = prof.selected_plan
+                if (prof.current_plan) currentPlan = prof.current_plan
+            }
         }
 
-        // Workouts
+        // ===== Helper: merge cloud rows with local array using client_id =====
+        // Keeps local rows that aren't in cloud, adds cloud rows that aren't local
+        function mergeByClientId(localArr, cloudRows, mapFn, idKey = "client_id") {
+            const cloudMapped = cloudRows.map(mapFn)
+            const cloudIds = new Set(cloudMapped.map(r => r[idKey]).filter(Boolean))
+            const localUnique = localArr.filter(r => !r[idKey] || !cloudIds.has(r[idKey]))
+            return [...localUnique, ...cloudMapped]
+        }
+
+        // ===== Workouts =====
         const { data: wo } = await sbClient.from("workouts").select("*").eq("user_id", currentUser.id).order("date", { ascending: true })
-        if (wo) {
-            workouts = wo.map(r => ({
-                date: r.date,
-                day: r.day,
-                exercise: r.exercise,
-                weight: r.weight,
-                reps: r.reps,
-                sets: r.sets,
-                rpe: r.rpe,
-                e1rm: r.e1rm,
-                notes: r.notes,
-                rating: r.rating,
-                energy: r.energy,
+        if (Array.isArray(wo)) {
+            workouts = mergeByClientId(workouts, wo, r => ({
+                date: r.date, day: r.day, exercise: r.exercise,
+                weight: r.weight, reps: r.reps, sets: r.sets,
+                rpe: r.rpe, e1rm: r.e1rm, notes: r.notes,
+                rating: r.rating, energy: r.energy,
                 client_id: r.client_id
             }))
         }
 
-        // Measurements
+        // ===== Measurements =====
         const { data: ms } = await sbClient.from("measurements").select("*").eq("user_id", currentUser.id).order("date", { ascending: false })
-        if (ms) {
-            measurements = ms.map(r => ({
-                id: r.id,
-                date: r.date,
-                weight: r.weight_kg,
-                bf: r.body_fat_pct,
-                waist: r.waist_cm,
-                chest: r.chest_cm,
-                arm: r.arm_cm,
-                thigh: r.thigh_cm,
+        if (Array.isArray(ms)) {
+            measurements = mergeByClientId(measurements, ms, r => ({
+                id: r.id, date: r.date,
+                weight: r.weight_kg, bf: r.body_fat_pct,
+                waist: r.waist_cm, chest: r.chest_cm,
+                arm: r.arm_cm, thigh: r.thigh_cm,
                 client_id: r.client_id
             }))
+            // Re-sort by date desc
+            measurements.sort((a, b) => new Date(b.date) - new Date(a.date))
         }
 
-        // Goals
+        // ===== Goals =====
         const { data: gs } = await sbClient.from("goals").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false })
-        if (gs) {
-            goals = gs.map(r => ({
-                id: r.id,
-                type: r.goal_type,
-                title: r.title,
-                exercise: r.exercise,
-                target: r.target_val,
-                deadline: r.deadline,
-                status: r.status,
-                createdAt: r.created_at,
-                createdWeight: r.created_weight,
+        if (Array.isArray(gs)) {
+            goals = mergeByClientId(goals, gs, r => ({
+                id: r.id, type: r.goal_type, title: r.title,
+                exercise: r.exercise, target: r.target_val,
+                deadline: r.deadline, status: r.status,
+                createdAt: r.created_at, createdWeight: r.created_weight,
                 client_id: r.client_id
             }))
         }
 
-        // Food log — rebuild by date
+        // ===== Food log — merge per day =====
         const { data: fl } = await sbClient.from("food_log").select("*").eq("user_id", currentUser.id).order("date", { ascending: false })
-        if (fl) {
-            const byDate = {}
+        if (Array.isArray(fl)) {
+            // Build cloud version
+            const cloudByDate = {}
             fl.forEach(r => {
-                if (!byDate[r.date]) byDate[r.date] = []
-                byDate[r.date].push({
-                    name: r.name,
-                    kcal: r.kcal,
-                    p: r.protein_g,
-                    c: r.carbs_g,
-                    f: r.fat_g,
-                    time: r.created_at,
-                    client_id: r.client_id
+                if (!cloudByDate[r.date]) cloudByDate[r.date] = []
+                cloudByDate[r.date].push({
+                    name: r.name, kcal: r.kcal,
+                    p: r.protein_g, c: r.carbs_g, f: r.fat_g,
+                    time: r.created_at, client_id: r.client_id
                 })
             })
-            foodLog = byDate
+            // Merge per date
+            const allDates = new Set([...Object.keys(foodLog), ...Object.keys(cloudByDate)])
+            const merged = {}
+            allDates.forEach(d => {
+                const localEntries = foodLog[d] || []
+                const cloudEntries = cloudByDate[d] || []
+                merged[d] = mergeByClientId(localEntries, cloudEntries, r => r)
+            })
+            foodLog = merged
         }
 
-        // Nutrition targets
+        // ===== Nutrition targets (single row, only replace if cloud has values) =====
         const { data: nt } = await sbClient.from("nutrition_targets").select("*").eq("user_id", currentUser.id).maybeSingle()
-        if (nt) {
+        if (nt && (nt.kcal || nt.protein_g || nt.carbs_g || nt.fat_g)) {
             nutritionTargets = { kcal: nt.kcal, p: nt.protein_g, c: nt.carbs_g, f: nt.fat_g }
         }
 
-        // Badges
+        // ===== Badges (union of cloud and local) =====
         const { data: bg } = await sbClient.from("earned_badges").select("*").eq("user_id", currentUser.id)
-        if (bg) {
-            earnedBadges = {}
-            bg.forEach(r => earnedBadges[r.badge_id] = r.earned_at)
+        if (Array.isArray(bg)) {
+            // Merge: keep local badges AND cloud badges
+            bg.forEach(r => {
+                if (!earnedBadges[r.badge_id]) {
+                    earnedBadges[r.badge_id] = r.earned_at
+                }
+            })
         }
 
-        // Persist locally
+        // Persist merged data locally
         saveData()
         lastSyncAt = new Date()
+
+        // Push merged data back to cloud so both sides match
+        // (This re-uploads any local records that weren't in cloud yet)
+        setTimeout(() => cloudPushAll().catch(e => console.warn("Post-merge push:", e)), 300)
 
         // Re-render active page
         const active = document.querySelector(".page.active-page")
