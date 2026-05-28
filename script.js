@@ -12,8 +12,8 @@ let profile      = JSON.parse(localStorage.getItem("forge_profile") || "null") |
 }
 let theme = localStorage.getItem("forge_theme") || "dark"
 
-// ============ GYM PLANS (4 only) ============
-const PLANS = {
+// ============ GYM PLANS (4 built-in defaults, used for reset) ============
+const DEFAULT_PLANS = {
     "Push Pull Legs": {
         days: 6, desc: "Classic bodybuilding split. High volume per muscle.",
         schedule: [
@@ -136,7 +136,60 @@ const PLANS = {
     },
 }
 
-// ============ RUN PLANS ============
+// ============ MUTABLE PLANS (editable copy in localStorage) ============
+// User can edit any of these. Reset to default is per-plan.
+let plans = JSON.parse(localStorage.getItem("forge_plans") || "null")
+if (!plans) {
+    plans = JSON.parse(JSON.stringify(DEFAULT_PLANS))
+}
+// Make sure any plan keys missing from user's saved plans get added (e.g. if we add new defaults later)
+Object.keys(DEFAULT_PLANS).forEach(k => {
+    if (!plans[k]) plans[k] = JSON.parse(JSON.stringify(DEFAULT_PLANS[k]))
+})
+
+// ============ WEEKLY SCHEDULE (rotating sequence) ============
+// Array of slots; each slot is one of:
+//   { id, type: "gym",  planName, dayName }
+//   { id, type: "run",  runType, distance, time }
+//   { id, type: "rest" }
+let schedule    = JSON.parse(localStorage.getItem("forge_schedule") || "[]")
+let schedulePos = parseInt(localStorage.getItem("forge_sched_pos") || "0", 10)
+
+function nextSlotId() {
+    return "s" + Date.now() + "-" + Math.floor(Math.random()*1000)
+}
+
+// Auto-generate a default schedule when a user picks a plan and has none
+function generateDefaultSchedule(planName) {
+    const p = plans[planName]
+    if (!p) return []
+    const days = p.schedule
+    const out = []
+    // Insert plan days, with a rest after every 3 working days for splits with 4+ days
+    days.forEach((d, i) => {
+        out.push({ id: nextSlotId(), type: "gym", planName, dayName: d.day })
+        if (days.length >= 4 && (i+1) % 3 === 0 && i < days.length - 1) {
+            out.push({ id: nextSlotId(), type: "rest" })
+        }
+    })
+    // Final rest day at end of cycle (unless schedule is already only 3 days)
+    if (days.length > 2) out.push({ id: nextSlotId(), type: "rest" })
+    return out
+}
+
+// Helpful: get the slot that's "up next" right now
+function currentSlot() {
+    if (!schedule.length) return null
+    if (schedulePos >= schedule.length) schedulePos = 0
+    return schedule[schedulePos]
+}
+function advanceSchedule() {
+    if (!schedule.length) return
+    schedulePos = (schedulePos + 1) % schedule.length
+    localStorage.setItem("forge_sched_pos", String(schedulePos))
+}
+
+
 const RUN_PLANS = {
     "5K Improvement": { desc: "Get faster over 5K. 3 runs/week, 6 weeks.", weekly: "1 easy · 1 intervals · 1 tempo" },
     "10K Improvement": { desc: "Build speed and endurance for 10K. 4 runs/week.", weekly: "2 easy · 1 intervals · 1 long" },
@@ -151,6 +204,9 @@ function save() {
     localStorage.setItem("forge_plan", JSON.stringify(selectedPlan))
     localStorage.setItem("forge_profile", JSON.stringify(profile))
     localStorage.setItem("forge_theme", theme)
+    localStorage.setItem("forge_plans", JSON.stringify(plans))
+    localStorage.setItem("forge_schedule", JSON.stringify(schedule))
+    localStorage.setItem("forge_sched_pos", String(schedulePos))
     if (typeof queueCloudPush === "function") queueCloudPush()
 }
 
@@ -272,7 +328,7 @@ function renderHome() {
 
     // gym sub — next workout
     const gymSub = document.getElementById("homeGymSub")
-    if (selectedPlan && PLANS[selectedPlan]) {
+    if (selectedPlan && plans[selectedPlan]) {
         const next = getNextDay()
         gymSub.textContent = next ? next.day : "Pick a workout"
     } else {
@@ -290,8 +346,8 @@ function renderHome() {
 }
 
 function getNextDay() {
-    if (!selectedPlan || !PLANS[selectedPlan]) return null
-    const sched = PLANS[selectedPlan].schedule
+    if (!selectedPlan || !plans[selectedPlan]) return null
+    const sched = plans[selectedPlan].schedule
     // find the least-recently-done day
     let best = sched[0], oldestDate = "9999"
     for (const d of sched) {
@@ -394,13 +450,13 @@ function renderGym() {
     banner.textContent = selectedPlan || "No plan selected"
 
     const list = document.getElementById("gymDayList")
-    if (!selectedPlan || !PLANS[selectedPlan]) {
+    if (!selectedPlan || !plans[selectedPlan]) {
         list.innerHTML = `<div class="card"><div class="empty-line">Choose a plan to see your workouts.</div>
             <button class="btn-primary full" style="margin-top:12px" onclick="openPlanPicker()">Choose a plan</button></div>`
         return
     }
     const nextDay = getNextDay()
-    list.innerHTML = PLANS[selectedPlan].schedule.map(d => {
+    list.innerHTML = plans[selectedPlan].schedule.map(d => {
         const isNext = nextDay && d.day === nextDay.day
         const last = workouts.filter(w => w.day === d.day).sort((a,b)=>new Date(b.date)-new Date(a.date))[0]
         const lastTxt = last ? `Last: ${timeAgo(last.date)}` : "Not done yet"
@@ -425,7 +481,7 @@ function timeAgo(dateStr) {
 }
 
 function startTodayGym() {
-    if (!selectedPlan || !PLANS[selectedPlan]) { go("gym"); openPlanPicker(); return }
+    if (!selectedPlan || !plans[selectedPlan]) { go("gym"); openPlanPicker(); return }
     const next = getNextDay()
     if (next) startWorkout(next.day)
     else go("gym")
@@ -445,6 +501,11 @@ function openPlanPicker() {
 
 function pickPlan(name) {
     selectedPlan = name
+    // If no schedule yet, auto-generate from this plan
+    if (!schedule || schedule.length === 0) {
+        schedule = generateDefaultSchedule(name)
+        schedulePos = 0
+    }
     save()
     closeSheet()
     toast(`${name} selected`, "success")
@@ -467,7 +528,7 @@ let activeWorkout = null  // { day, exercises: [{name, target, sets:[{weight,rep
 let workoutClockInterval = null
 
 function startWorkout(dayName) {
-    const day = PLANS[selectedPlan].schedule.find(d => d.day === dayName)
+    const day = plans[selectedPlan].schedule.find(d => d.day === dayName)
     if (!day) return
 
     activeWorkout = {
@@ -632,6 +693,7 @@ function finishWorkout() {
         if (prevBest && newBest && newBest.e1rm > prevBest.e1rm + 0.5) prCount++
     })
 
+    const finishedDay = activeWorkout.day
     activeWorkout = null
     clearInterval(workoutClockInterval)
 
@@ -642,6 +704,12 @@ function finishWorkout() {
     }
 
     save()
+    // Advance the schedule if the just-finished workout matches the current slot
+    const cs = currentSlot()
+    if (cs && cs.type === "gym" && cs.planName === selectedPlan && cs.dayName === finishedDay) {
+        advanceSchedule()
+        save()
+    }
     if (prCount > 0) toast(`🏆 ${prCount} new PR${prCount>1?'s':''}! ${logged} exercises logged`, "success")
     else toast(`Workout saved — ${logged} exercises`, "success")
     go("home")
@@ -694,7 +762,7 @@ function repeatLastWorkout() {
     if (workouts.length === 0) { toast("No previous workouts", "warn"); return }
     const lastDate = workouts.map(w=>w.date).sort().reverse()[0]
     const lastDay = workouts.filter(w=>w.date===lastDate)[0]?.day
-    if (lastDay && PLANS[selectedPlan]?.schedule.find(d=>d.day===lastDay)) {
+    if (lastDay && plans[selectedPlan]?.schedule.find(d=>d.day===lastDay)) {
         startWorkout(lastDay)
     } else {
         toast("Last workout's plan not found", "warn")
@@ -749,6 +817,12 @@ function saveRun() {
         client_id: `r-${Date.now()}`
     })
     save()
+    // Advance schedule if current slot is a run
+    const cs = currentSlot()
+    if (cs && cs.type === "run") {
+        advanceSchedule()
+        save()
+    }
     document.getElementById("runDist").value = ""
     document.getElementById("runTime").value = ""
     document.getElementById("runPacePreview").textContent = "Pace will show here"
@@ -1179,4 +1253,555 @@ function mergeById(local, cloud) {
         if (!seen.has(id)) { seen.add(id); out.push(item) }
     })
     return out
+}
+
+/* =========================================================
+   ============ EDITABLE PLANS + SCHEDULE ==================
+   ========================================================= */
+
+// ============ GYM SCREEN — use the schedule ============
+// We override renderGym (defined earlier) to render the schedule preview + today box
+function renderGym() {
+    const banner = document.getElementById("planBannerName")
+    banner.textContent = selectedPlan || "No plan"
+
+    const today = document.getElementById("gymTodayBox")
+    const slot = currentSlot()
+    if (!selectedPlan) {
+        today.innerHTML = `<div class="schedule-empty">Pick a plan to get started.<br><button class="btn-primary" style="margin-top:14px" onclick="openPlanPicker()">Choose a plan</button></div>`
+    } else if (!slot) {
+        today.innerHTML = `<div class="schedule-empty">No schedule yet.<br><button class="btn-primary" style="margin-top:14px" onclick="generateScheduleNow()">Build a schedule</button></div>`
+    } else {
+        today.innerHTML = renderTodayBox(slot)
+    }
+
+    // Schedule preview — next 4 slots
+    const preview = document.getElementById("gymSchedPreview")
+    if (!schedule.length) {
+        preview.innerHTML = ""
+    } else {
+        const items = []
+        for (let i = 0; i < Math.min(4, schedule.length); i++) {
+            const idx = (schedulePos + i) % schedule.length
+            items.push(renderSlot(schedule[idx], idx, i === 0))
+        }
+        preview.innerHTML = items.join("")
+    }
+}
+
+function renderTodayBox(slot) {
+    if (slot.type === "gym") {
+        const plan = plans[slot.planName]
+        const day = plan?.schedule.find(d => d.day === slot.dayName)
+        const exCount = day?.ex.length || 0
+        return `<div class="today-box" onclick="startSlot()">
+            <div class="today-tag">Today · ${slot.planName}</div>
+            <div class="today-name">${slot.dayName}</div>
+            <div class="today-sub">${exCount} exercises</div>
+            <div class="today-cta">Start workout ›</div>
+        </div>`
+    }
+    if (slot.type === "run") {
+        const tags = []
+        if (slot.distance) tags.push(`${slot.distance}km`)
+        if (slot.runType) tags.push(slot.runType)
+        return `<div class="today-box run" onclick="startSlot()">
+            <div class="today-tag">Today · Running</div>
+            <div class="today-name">${slot.runType ? slot.runType.charAt(0).toUpperCase()+slot.runType.slice(1)+' run' : 'Run'}</div>
+            <div class="today-sub">${tags.join(' · ') || 'Go for a run'}</div>
+            <div class="today-cta">Log run ›</div>
+        </div>`
+    }
+    return `<div class="today-box rest">
+        <div class="today-tag">Today</div>
+        <div class="today-name">Rest day</div>
+        <div class="today-sub">Recovery is part of the program. Take it easy.</div>
+        <div class="today-cta" onclick="event.stopPropagation();markRestDone()">Mark complete ›</div>
+    </div>`
+}
+
+function renderSlot(slot, idx, isCurrent) {
+    let icon, title, sub, cls
+    if (slot.type === "gym") {
+        icon = "💪"; cls = "gym"
+        title = slot.dayName
+        sub = slot.planName
+    } else if (slot.type === "run") {
+        icon = "🏃"; cls = "run"
+        title = slot.runType ? slot.runType.charAt(0).toUpperCase()+slot.runType.slice(1) + " run" : "Run"
+        const tags = []
+        if (slot.distance) tags.push(`${slot.distance}km`)
+        if (slot.time) tags.push(`${slot.time}min`)
+        sub = tags.join(' · ') || "Free run"
+    } else {
+        icon = "○"; cls = "rest"
+        title = "Rest day"
+        sub = "Recovery"
+    }
+    const currentClass = isCurrent ? " current" : ""
+    const nowTag = isCurrent ? `<span class="sched-now-tag">Next</span>` : ""
+    return `<div class="sched-slot ${cls}${currentClass}" onclick="startSpecificSlot(${idx})">
+        <div class="sched-icon">${icon}</div>
+        <div class="sched-body">
+            <div class="sched-num">Day ${idx+1}</div>
+            <div class="sched-title">${title}${nowTag}</div>
+            <div class="sched-sub">${sub}</div>
+        </div>
+        <div class="sched-actions">
+            <span style="color:var(--muted);font-size:20px">›</span>
+        </div>
+    </div>`
+}
+
+function startSlot() {
+    const slot = currentSlot()
+    if (!slot) return
+    if (slot.type === "gym") {
+        startWorkout(slot.dayName)
+    } else if (slot.type === "run") {
+        go("run")
+        // pre-fill distance/time if specified
+        if (slot.distance) document.getElementById("runDist").value = slot.distance
+        if (slot.time) document.getElementById("runTime").value = slot.time
+        if (slot.runType) document.getElementById("runType").value = slot.runType
+        // trigger pace update
+        const evt = new Event('input')
+        document.getElementById("runDist").dispatchEvent(evt)
+    } else if (slot.type === "rest") {
+        markRestDone()
+    }
+}
+
+function startSpecificSlot(idx) {
+    if (idx === schedulePos) {
+        startSlot()
+    } else {
+        // jump to that slot
+        openSheet(`<div class="sheet-title">Jump to Day ${idx+1}?</div>
+            <div class="sheet-sub">This will skip days in between.</div>
+            <button class="btn-primary full" style="margin-bottom:10px" onclick="setSchedulePos(${idx});closeSheet()">Jump to Day ${idx+1}</button>
+            <button class="btn-ghost" style="width:100%;padding:14px" onclick="closeSheet()">Cancel</button>`)
+    }
+}
+
+function setSchedulePos(idx) {
+    schedulePos = idx
+    save()
+    if (currentScreen === "gym") renderGym()
+    if (currentScreen === "home") renderHome()
+    if (currentScreen === "schedule") renderSchedule()
+}
+
+function markRestDone() {
+    advanceSchedule()
+    save()
+    toast("Rest day done", "success")
+    if (currentScreen === "gym") renderGym()
+    if (currentScreen === "home") renderHome()
+    if (currentScreen === "schedule") renderSchedule()
+}
+
+function skipScheduleSlot() {
+    if (!schedule.length) { toast("No schedule yet", "warn"); return }
+    advanceSchedule()
+    save()
+    toast("Skipped to next day", "")
+    if (currentScreen === "gym") renderGym()
+    if (currentScreen === "home") renderHome()
+}
+
+function generateScheduleNow() {
+    if (!selectedPlan) { openPlanPicker(); return }
+    schedule = generateDefaultSchedule(selectedPlan)
+    schedulePos = 0
+    save()
+    toast("Schedule built", "success")
+    renderGym()
+}
+
+// ============ SCHEDULE SCREEN ============
+function renderSchedule() {
+    const box = document.getElementById("scheduleList")
+    if (!schedule.length) {
+        box.innerHTML = `<div class="schedule-empty">No days in your schedule yet. Add some below.</div>`
+        return
+    }
+    box.innerHTML = schedule.map((s, i) => renderEditableSlot(s, i)).join("")
+}
+
+function renderEditableSlot(slot, idx) {
+    let icon, title, sub, cls
+    if (slot.type === "gym") {
+        icon = "💪"; cls = "gym"
+        title = slot.dayName
+        sub = slot.planName
+    } else if (slot.type === "run") {
+        icon = "🏃"; cls = "run"
+        title = slot.runType ? slot.runType.charAt(0).toUpperCase()+slot.runType.slice(1) + " run" : "Run"
+        const tags = []
+        if (slot.distance) tags.push(`${slot.distance}km`)
+        if (slot.time) tags.push(`${slot.time}min`)
+        sub = tags.join(' · ') || "Free run"
+    } else {
+        icon = "○"; cls = "rest"
+        title = "Rest day"
+        sub = "Recovery"
+    }
+    const cur = idx === schedulePos ? " current" : ""
+    const nowTag = idx === schedulePos ? `<span class="sched-now-tag">Next</span>` : ""
+    return `<div class="sched-slot ${cls}${cur}" onclick="editSlot(${idx})">
+        <div class="sched-icon">${icon}</div>
+        <div class="sched-body">
+            <div class="sched-num">Day ${idx+1}</div>
+            <div class="sched-title">${title}${nowTag}</div>
+            <div class="sched-sub">${sub}</div>
+        </div>
+        <div class="sched-actions">
+            <button class="sched-del-btn" onclick="event.stopPropagation();deleteSlot(${idx})">✕</button>
+        </div>
+    </div>`
+}
+
+function deleteSlot(idx) {
+    schedule.splice(idx, 1)
+    if (schedulePos >= schedule.length && schedule.length > 0) schedulePos = 0
+    save()
+    renderSchedule()
+}
+
+function editSlot(idx) {
+    openAddSlot(idx)
+}
+
+function openAddSlot(editIdx) {
+    const isEdit = editIdx != null
+    const existing = isEdit ? schedule[editIdx] : null
+    let html = `<div class="sheet-title">${isEdit ? "Edit" : "Add"} day</div>
+        <div class="sheet-sub">What kind of training is this?</div>`
+    html += `<button class="slot-type-btn" onclick="addGymSlot(${editIdx != null ? editIdx : 'null'})">
+        <div class="sched-icon gym" style="background:var(--blue-dim);color:var(--blue)">💪</div>
+        <div class="slot-type-btn-info"><div class="slot-type-btn-name">Gym workout</div><div class="slot-type-btn-sub">Pick a day from your plan</div></div>
+    </button>`
+    html += `<button class="slot-type-btn" onclick="addRunSlot(${editIdx != null ? editIdx : 'null'})">
+        <div class="sched-icon run" style="background:rgba(255,159,10,0.15);color:var(--orange)">🏃</div>
+        <div class="slot-type-btn-info"><div class="slot-type-btn-name">Running session</div><div class="slot-type-btn-sub">Easy, tempo, intervals, long</div></div>
+    </button>`
+    html += `<button class="slot-type-btn" onclick="addRestSlot(${editIdx != null ? editIdx : 'null'})">
+        <div class="sched-icon rest" style="background:var(--surface-2);color:var(--muted)">○</div>
+        <div class="slot-type-btn-info"><div class="slot-type-btn-name">Rest day</div><div class="slot-type-btn-sub">Recovery</div></div>
+    </button>`
+    openSheet(html)
+}
+
+function addGymSlot(editIdx) {
+    if (!selectedPlan || !plans[selectedPlan]) {
+        closeSheet()
+        toast("Pick a plan first", "warn")
+        openPlanPicker()
+        return
+    }
+    let html = `<div class="sheet-title">Pick a day</div><div class="sheet-sub">From ${selectedPlan}</div>`
+    plans[selectedPlan].schedule.forEach(d => {
+        html += `<div class="plan-option" onclick="commitGymSlot('${d.day.replace(/'/g,"\\'")}',${editIdx})">
+            <div class="plan-option-name">${d.day}</div>
+            <div class="plan-option-desc">${d.ex.length} exercises</div>
+        </div>`
+    })
+    openSheet(html)
+}
+
+function commitGymSlot(dayName, editIdx) {
+    const slot = { id: nextSlotId(), type: "gym", planName: selectedPlan, dayName }
+    if (editIdx !== null && editIdx !== undefined) {
+        schedule[editIdx] = { ...slot, id: schedule[editIdx].id }
+    } else {
+        schedule.push(slot)
+    }
+    save()
+    closeSheet()
+    renderSchedule()
+}
+
+function addRunSlot(editIdx) {
+    let html = `<div class="sheet-title">Run details</div>
+        <div class="sheet-sub">Set a target for this run.</div>
+        <div class="field"><label>Type</label>
+            <select id="newRunType">
+                <option value="easy">Easy</option>
+                <option value="tempo">Tempo</option>
+                <option value="intervals">Intervals</option>
+                <option value="long">Long</option>
+            </select>
+        </div>
+        <div class="run-input-grid">
+            <div class="field"><label>Distance (km, optional)</label><input type="number" inputmode="decimal" id="newRunDist" placeholder="5"></div>
+            <div class="field"><label>Time (min, optional)</label><input type="number" inputmode="decimal" id="newRunTime" placeholder="25"></div>
+        </div>
+        <button class="btn-primary full btn-orange" onclick="commitRunSlot(${editIdx})">Save</button>`
+    openSheet(html)
+}
+
+function commitRunSlot(editIdx) {
+    const slot = {
+        id: nextSlotId(),
+        type: "run",
+        runType: document.getElementById("newRunType").value,
+        distance: parseFloat(document.getElementById("newRunDist").value) || null,
+        time: parseFloat(document.getElementById("newRunTime").value) || null,
+    }
+    if (editIdx !== null && editIdx !== undefined) {
+        schedule[editIdx] = { ...slot, id: schedule[editIdx].id }
+    } else {
+        schedule.push(slot)
+    }
+    save()
+    closeSheet()
+    renderSchedule()
+}
+
+function addRestSlot(editIdx) {
+    const slot = { id: nextSlotId(), type: "rest" }
+    if (editIdx !== null && editIdx !== undefined) {
+        schedule[editIdx] = { ...slot, id: schedule[editIdx].id }
+    } else {
+        schedule.push(slot)
+    }
+    save()
+    closeSheet()
+    renderSchedule()
+}
+
+function resetSchedule() {
+    openSheet(`<div class="sheet-title">Reset schedule?</div>
+        <div class="sheet-sub">Rebuilds from your current plan with default rest days.</div>
+        <button class="btn-primary full" style="margin-bottom:10px" onclick="doResetSchedule()">Reset</button>
+        <button class="btn-ghost" style="width:100%;padding:14px" onclick="closeSheet()">Cancel</button>`)
+}
+function doResetSchedule() {
+    if (!selectedPlan) { closeSheet(); toast("Pick a plan first", "warn"); return }
+    schedule = generateDefaultSchedule(selectedPlan)
+    schedulePos = 0
+    save()
+    closeSheet()
+    renderSchedule()
+    toast("Schedule reset", "success")
+}
+
+// ============ MANAGE PLANS SCREEN ============
+let editingPlanKey = null
+let editingDayIdx = null
+
+function renderPlans() {
+    const box = document.getElementById("plansList")
+    const allNames = Object.keys(plans)
+    box.innerHTML = allNames.map(name => {
+        const p = plans[name]
+        const isBuiltin = DEFAULT_PLANS[name] != null
+        const isActive = name === selectedPlan
+        return `<div class="plan-list-card${isActive?' active':''}" onclick="openEditPlan('${name.replace(/'/g,"\\'")}')">
+            <div>
+                <div class="plan-list-name">${name}${isActive?'<span class="plan-list-tag active">Active</span>':''}${isBuiltin?'':'<span class="plan-list-tag">Custom</span>'}</div>
+                <div class="plan-list-sub">${p.schedule.length} days · ${p.desc || ''}</div>
+            </div>
+            <span style="color:var(--muted);font-size:20px">›</span>
+        </div>`
+    }).join("")
+}
+
+function openEditPlan(name) {
+    editingPlanKey = name
+    document.getElementById("editPlanTitle").textContent = name
+    document.getElementById("editPlanName").value = name
+    document.getElementById("editPlanDesc").value = plans[name].desc || ""
+    // Show reset button only for built-ins, delete only for custom
+    document.getElementById("resetPlanRow").style.display = DEFAULT_PLANS[name] ? "" : "none"
+    document.getElementById("deletePlanRow").style.display = DEFAULT_PLANS[name] ? "none" : ""
+    go("edit-plan")
+    renderEditPlanDays()
+}
+
+function renderEditPlanDays() {
+    const box = document.getElementById("editPlanDays")
+    const p = plans[editingPlanKey]
+    if (!p || !p.schedule.length) {
+        box.innerHTML = `<div class="schedule-empty">No days. Add one below.</div>`
+        return
+    }
+    box.innerHTML = p.schedule.map((d, i) => `
+        <div class="day-edit-card" onclick="openEditDay(${i})">
+            <div class="day-edit-card-info">
+                <div class="day-edit-card-name">${d.day}</div>
+                <div class="day-edit-card-sub">${d.ex.length} exercises</div>
+            </div>
+            <div class="day-edit-card-actions">
+                <button onclick="event.stopPropagation();deleteDay(${i})">✕</button>
+            </div>
+        </div>`).join("")
+}
+
+function updatePlanName() {
+    const newName = document.getElementById("editPlanName").value.trim()
+    if (!newName || newName === editingPlanKey) return
+    if (plans[newName]) { toast("Name already used", "warn"); document.getElementById("editPlanName").value = editingPlanKey; return }
+    plans[newName] = plans[editingPlanKey]
+    delete plans[editingPlanKey]
+    // Update selected plan if needed
+    if (selectedPlan === editingPlanKey) selectedPlan = newName
+    // Update schedule references
+    schedule.forEach(s => { if (s.type === "gym" && s.planName === editingPlanKey) s.planName = newName })
+    editingPlanKey = newName
+    document.getElementById("editPlanTitle").textContent = newName
+    save()
+}
+
+function updatePlanDesc() {
+    plans[editingPlanKey].desc = document.getElementById("editPlanDesc").value.trim()
+    save()
+}
+
+function addDayToPlan() {
+    const p = plans[editingPlanKey]
+    p.schedule.push({ day: "New day", ex: [{ name: "New exercise", sets: 3, reps: "8-12" }] })
+    save()
+    renderEditPlanDays()
+}
+
+function deleteDay(idx) {
+    const p = plans[editingPlanKey]
+    if (!confirm(`Delete "${p.schedule[idx].day}"?`)) return
+    const oldDay = p.schedule[idx].day
+    p.schedule.splice(idx, 1)
+    // Remove schedule slots that point to this day
+    schedule = schedule.filter(s => !(s.type === "gym" && s.planName === editingPlanKey && s.dayName === oldDay))
+    save()
+    renderEditPlanDays()
+}
+
+function resetPlanToDefault() {
+    if (!DEFAULT_PLANS[editingPlanKey]) return
+    if (!confirm(`Reset "${editingPlanKey}" to default? All your changes to this plan will be lost.`)) return
+    plans[editingPlanKey] = JSON.parse(JSON.stringify(DEFAULT_PLANS[editingPlanKey]))
+    save()
+    toast("Reset to default", "success")
+    openEditPlan(editingPlanKey)
+}
+
+function deletePlan() {
+    if (DEFAULT_PLANS[editingPlanKey]) { toast("Can't delete built-in", "warn"); return }
+    if (!confirm(`Delete "${editingPlanKey}" permanently?`)) return
+    const name = editingPlanKey
+    delete plans[name]
+    if (selectedPlan === name) {
+        selectedPlan = Object.keys(plans)[0] || null
+    }
+    schedule = schedule.filter(s => !(s.type === "gym" && s.planName === name))
+    save()
+    toast("Plan deleted", "success")
+    go("plans")
+}
+
+function createNewPlan() {
+    let n = 1
+    while (plans["My Plan " + n]) n++
+    const name = "My Plan " + n
+    plans[name] = {
+        days: 0, desc: "Custom plan",
+        schedule: [{ day: "Day 1", ex: [{ name: "New exercise", sets: 3, reps: "8-12" }] }]
+    }
+    save()
+    openEditPlan(name)
+}
+
+// ============ EDIT DAY ============
+function openEditDay(dayIdx) {
+    editingDayIdx = dayIdx
+    const d = plans[editingPlanKey].schedule[dayIdx]
+    document.getElementById("editDayTitle").textContent = d.day
+    document.getElementById("editDayName").value = d.day
+    go("edit-day")
+    renderEditDayExercises()
+}
+
+function renderEditDayExercises() {
+    const d = plans[editingPlanKey].schedule[editingDayIdx]
+    const box = document.getElementById("editDayExercises")
+    if (!d.ex.length) {
+        box.innerHTML = `<div class="schedule-empty">No exercises. Add one below.</div>`
+        return
+    }
+    box.innerHTML = d.ex.map((e, i) => `
+        <div class="ex-edit-row">
+            <div class="ex-edit-row-top">
+                <input type="text" value="${(e.name||'').replace(/"/g,'&quot;')}" placeholder="Exercise name" onchange="updateExerciseField(${i},'name',this.value)">
+            </div>
+            <div class="ex-edit-row-grid">
+                <div class="field"><label>Sets</label><input type="number" inputmode="numeric" value="${e.sets||3}" onchange="updateExerciseField(${i},'sets',parseInt(this.value)||3)"></div>
+                <div class="field"><label>Reps</label><input type="text" value="${(e.reps||'').replace(/"/g,'&quot;')}" placeholder="8-12" onchange="updateExerciseField(${i},'reps',this.value)"></div>
+                <button class="ex-del-btn" onclick="deleteExercise(${i})" title="Delete">✕</button>
+            </div>
+        </div>`).join("")
+}
+
+function updateDayName() {
+    const newName = document.getElementById("editDayName").value.trim()
+    if (!newName) return
+    const oldName = plans[editingPlanKey].schedule[editingDayIdx].day
+    plans[editingPlanKey].schedule[editingDayIdx].day = newName
+    // Update schedule references
+    schedule.forEach(s => { if (s.type === "gym" && s.planName === editingPlanKey && s.dayName === oldName) s.dayName = newName })
+    document.getElementById("editDayTitle").textContent = newName
+    save()
+}
+
+function updateExerciseField(idx, field, value) {
+    plans[editingPlanKey].schedule[editingDayIdx].ex[idx][field] = value
+    save()
+}
+
+function addExerciseToDay() {
+    plans[editingPlanKey].schedule[editingDayIdx].ex.push({ name: "New exercise", sets: 3, reps: "8-12" })
+    save()
+    renderEditDayExercises()
+}
+
+function deleteExercise(idx) {
+    plans[editingPlanKey].schedule[editingDayIdx].ex.splice(idx, 1)
+    save()
+    renderEditDayExercises()
+}
+
+// ============ HOME UPDATE: show today's scheduled item ============
+const _origRenderHome = renderHome
+renderHome = function() {
+    _origRenderHome()
+    // After base render, override the gym sub with today's actual schedule item
+    const slot = currentSlot()
+    const gymSub = document.getElementById("homeGymSub")
+    if (slot && gymSub) {
+        if (slot.type === "gym") gymSub.textContent = slot.dayName
+        else if (slot.type === "run") gymSub.textContent = "Today is run day"
+        else if (slot.type === "rest") gymSub.textContent = "Today is rest"
+    }
+}
+
+// startTodayGym should now respect the schedule
+const _origStartTodayGym = startTodayGym
+startTodayGym = function() {
+    const slot = currentSlot()
+    if (slot) {
+        if (slot.type === "gym") { startWorkout(slot.dayName); return }
+        if (slot.type === "run") { startSlot(); return }
+        if (slot.type === "rest") { go("gym"); return }
+    }
+    _origStartTodayGym()
+}
+
+// ============ NAVIGATION extension ============
+const _origGo = go
+go = function(screen) {
+    _origGo(screen)
+    if (screen === "schedule") renderSchedule()
+    if (screen === "plans") renderPlans()
+    if (screen === "edit-plan") renderEditPlanDays()
+    if (screen === "edit-day") renderEditDayExercises()
 }
