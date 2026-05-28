@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<title>FORGE — Train Harder</title>
+<meta name="theme-color" content="#0a0a0b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FORGE">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body data-theme="dark">
+
+<!-- ============ APP ============ -->
+<div id="app">
+
+    <!-- ===== HOME ===== -->
+    <section class="screen active" id="screen-home">
+        <header class="screen-head">
+            <div>
+                <div class="greeting" id="homeGreeting">Ready to train</div>
+                <h1 class="screen-title" id="homeTitle">Today</h1>
+            </div>
+            <button class="streak-chip" id="streakChip" onclick="go('progress')">
+                <span class="streak-flame">🔥</span><span id="streakNum">0</span>
+            </button>
+        </header>
+
+        <!-- Two big start buttons -->
+        <div class="start-grid">
+            <button class="start-btn gym" onclick="startTodayGym()">
+                <div class="start-btn-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.5 6.5L17.5 17.5M4 12l-2 2M20 12l2-2M7 7L5 5M17 17l2 2M9 4.5L4.5 9M19.5 15L15 19.5" stroke-linecap="round"/></svg>
+                </div>
+                <div class="start-btn-label">Start Gym</div>
+                <div class="start-btn-sub" id="homeGymSub">Pick a workout</div>
+            </button>
+            <button class="start-btn run" onclick="go('run')">
+                <div class="start-btn-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 4a1.5 1.5 0 100 3 1.5 1.5 0 000-3zM8 9l3-1 2 2 1 4M11 10l-2 5-3 3M14 13l3 1M9 21l2-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <div class="start-btn-label">Start Run</div>
+                <div class="start-btn-sub">Log a run</div>
+            </button>
+        </div>
+
+        <!-- Weekly progress -->
+        <div class="card">
+            <div class="card-head">
+                <span class="card-title">This Week</span>
+                <span class="card-meta" id="weekMeta">—</span>
+            </div>
+            <div class="week-dots" id="weekDots"></div>
+        </div>
+
+        <!-- Recovery -->
+        <div class="card" id="recoveryCard">
+            <div class="card-head">
+                <span class="card-title">Recovery</span>
+                <span class="card-meta" id="recoveryState">—</span>
+            </div>
+            <div class="recovery-bar"><div class="recovery-fill" id="recoveryFill"></div></div>
+            <div class="recovery-note" id="recoveryNote"></div>
+        </div>
+
+        <!-- Recent PRs -->
+        <div class="card" id="homePRCard">
+            <div class="card-head">
+                <span class="card-title">Recent PRs</span>
+            </div>
+            <div id="homePRList"></div>
+        </div>
+    </section>
+
+    <!-- ===== GYM ===== -->
+    <section class="screen" id="screen-gym">
+        <header class="screen-head">
+            <div>
+                <div class="greeting">Strength</div>
+                <h1 class="screen-title">Gym</h1>
+            </div>
+        </header>
+
+        <!-- Active plan banner -->
+        <div class="card plan-banner" id="planBanner">
+            <div class="plan-banner-info">
+                <div class="card-meta">Active plan</div>
+                <div class="plan-banner-name" id="planBannerName">No plan</div>
+            </div>
+            <button class="btn-ghost" onclick="openPlanPicker()">Change</button>
+        </div>
+
+        <!-- Today's workout / day picker -->
+        <div class="section-label">Choose your day</div>
+        <div id="gymDayList"></div>
+
+        <div class="section-label">Quick actions</div>
+        <div class="quick-row">
+            <button class="quick-btn" onclick="repeatLastWorkout()">
+                <span class="quick-ico">⟳</span> Repeat last
+            </button>
+            <button class="quick-btn" onclick="go('history')">
+                <span class="quick-ico">≣</span> History
+            </button>
+            <button class="quick-btn" onclick="openPaceFromGym()">
+                <span class="quick-ico">★</span> Records
+            </button>
+        </div>
+    </section>
+
+    <!-- ===== WORKOUT (active session) ===== -->
+    <section class="screen workout-screen" id="screen-workout">
+        <header class="workout-head">
+            <button class="icon-btn" onclick="confirmExitWorkout()">✕</button>
+            <div class="workout-head-center">
+                <div class="workout-day-name" id="workoutDayName">Workout</div>
+                <div class="workout-timer" id="workoutClock">00:00</div>
+            </div>
+            <button class="icon-btn" onclick="finishWorkout()">✓</button>
+        </header>
+
+        <div class="workout-progress"><div class="workout-progress-fill" id="exerciseProgress"></div></div>
+
+        <div id="workoutBody"></div>
+    </section>
+
+    <!-- ===== RUN ===== -->
+    <section class="screen" id="screen-run">
+        <header class="screen-head">
+            <div>
+                <div class="greeting">Cardio</div>
+                <h1 class="screen-title">Run</h1>
+            </div>
+        </header>
+
+        <!-- Log a run -->
+        <div class="card">
+            <div class="card-head"><span class="card-title">Log a run</span></div>
+            <div class="run-input-grid">
+                <div class="field">
+                    <label>Distance (km)</label>
+                    <input type="number" inputmode="decimal" id="runDist" placeholder="5.0" step="0.1">
+                </div>
+                <div class="field">
+                    <label>Time (min)</label>
+                    <input type="number" inputmode="decimal" id="runTime" placeholder="25" step="0.1">
+                </div>
+            </div>
+            <div class="run-pace-preview" id="runPacePreview">Pace will show here</div>
+            <div class="field">
+                <label>Type</label>
+                <select id="runType">
+                    <option value="easy">Easy run</option>
+                    <option value="tempo">Tempo</option>
+                    <option value="intervals">Intervals</option>
+                    <option value="long">Long run</option>
+                    <option value="race">Race</option>
+                </select>
+            </div>
+            <button class="btn-primary full btn-orange" onclick="saveRun()">Save run</button>
+        </div>
+
+        <!-- Pace calculator -->
+        <div class="card">
+            <div class="card-head"><span class="card-title">Pace calculator</span></div>
+            <div class="run-input-grid">
+                <div class="field"><label>Distance (km)</label><input type="number" inputmode="decimal" id="calcDist" placeholder="10" step="0.1" oninput="calcPace()"></div>
+                <div class="field"><label>Target pace (min/km)</label><input type="number" inputmode="decimal" id="calcPace" placeholder="5.5" step="0.05" oninput="calcPace()"></div>
+            </div>
+            <div class="run-pace-preview" id="calcResult">Enter values to calculate finish time</div>
+        </div>
+
+        <!-- Run plans -->
+        <div class="section-label">Training plans</div>
+        <div id="runPlanList"></div>
+
+        <!-- Recent runs -->
+        <div class="section-label">Recent runs</div>
+        <div id="runHistory"></div>
+    </section>
+
+    <!-- ===== PROGRESS ===== -->
+    <section class="screen" id="screen-progress">
+        <header class="screen-head">
+            <div>
+                <div class="greeting">Your numbers</div>
+                <h1 class="screen-title">Progress</h1>
+            </div>
+        </header>
+
+        <div class="seg-control" id="progressSeg">
+            <button class="seg active" onclick="switchProgress('gym',this)">Gym</button>
+            <button class="seg" onclick="switchProgress('run',this)">Run</button>
+        </div>
+
+        <div id="progressGym">
+            <div class="stat-grid">
+                <div class="stat-card"><div class="stat-val" id="pgSessions">0</div><div class="stat-lbl">Sessions</div></div>
+                <div class="stat-card"><div class="stat-val" id="pgVolume">0</div><div class="stat-lbl">Volume (t)</div></div>
+                <div class="stat-card"><div class="stat-val" id="pgStreak">0</div><div class="stat-lbl">Streak</div></div>
+                <div class="stat-card"><div class="stat-val" id="pgWeight">—</div><div class="stat-lbl">Body wt</div></div>
+            </div>
+            <div class="card">
+                <div class="card-head"><span class="card-title">Top lifts</span></div>
+                <div id="pgTopLifts"></div>
+            </div>
+            <div class="card">
+                <div class="card-head"><span class="card-title">Body weight</span><button class="btn-ghost sm" onclick="openWeightLog()">Log</button></div>
+                <div id="pgWeightChart"></div>
+            </div>
+        </div>
+
+        <div id="progressRun" style="display:none">
+            <div class="stat-grid">
+                <div class="stat-card"><div class="stat-val" id="prRuns">0</div><div class="stat-lbl">Runs</div></div>
+                <div class="stat-card"><div class="stat-val" id="prKm">0</div><div class="stat-lbl">Total km</div></div>
+                <div class="stat-card"><div class="stat-val" id="prWeek">0</div><div class="stat-lbl">This wk km</div></div>
+                <div class="stat-card"><div class="stat-val" id="prPace">—</div><div class="stat-lbl">Avg pace</div></div>
+            </div>
+            <div class="card">
+                <div class="card-head"><span class="card-title">Pace progression</span></div>
+                <div id="prPaceChart"></div>
+            </div>
+            <div class="card">
+                <div class="card-head"><span class="card-title">Weekly mileage</span></div>
+                <div id="prMileageChart"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== HISTORY ===== -->
+    <section class="screen" id="screen-history">
+        <header class="screen-head">
+            <button class="back-btn" onclick="go('gym')">‹ Gym</button>
+            <div><h1 class="screen-title">History</h1></div>
+        </header>
+        <div id="historyList"></div>
+    </section>
+
+    <!-- ===== PROFILE ===== -->
+    <section class="screen" id="screen-profile">
+        <header class="screen-head">
+            <div>
+                <div class="greeting">Settings</div>
+                <h1 class="screen-title">Profile</h1>
+            </div>
+        </header>
+
+        <div class="card">
+            <div class="profile-row">
+                <div class="field"><label>Name</label><input type="text" id="profName" placeholder="Your name" onchange="saveProfileFields()"></div>
+            </div>
+            <div class="run-input-grid">
+                <div class="field"><label>Body weight (kg)</label><input type="number" inputmode="decimal" id="profWeight" placeholder="75" onchange="saveProfileFields()"></div>
+                <div class="field"><label>Rest timer (s)</label><input type="number" inputmode="numeric" id="profRest" placeholder="90" onchange="saveProfileFields()"></div>
+            </div>
+        </div>
+
+        <div class="section-label">Preferences</div>
+        <div class="card list-card">
+            <div class="list-row" onclick="toggleTheme()">
+                <span>Appearance</span>
+                <span class="list-val" id="themeLabel">Dark</span>
+            </div>
+            <div class="list-row">
+                <span>Auto rest timer</span>
+                <label class="switch"><input type="checkbox" id="autoRest" checked onchange="saveProfileFields()"><span class="slider"></span></label>
+            </div>
+            <div class="list-row">
+                <span>Warmup suggestions</span>
+                <label class="switch"><input type="checkbox" id="warmupPref" checked onchange="saveProfileFields()"><span class="slider"></span></label>
+            </div>
+        </div>
+
+        <!-- Cloud sync — hidden/optional, tucked at the bottom -->
+        <div class="section-label">Cloud sync <span class="optional-tag">optional</span></div>
+        <div class="card list-card">
+            <div class="list-row" id="syncRow" onclick="handleAuthClick()">
+                <span id="syncLabel">Sign in to back up</span>
+                <span class="list-val" id="syncState">›</span>
+            </div>
+        </div>
+
+        <div class="section-label">Data</div>
+        <div class="card list-card">
+            <div class="list-row" onclick="exportData()"><span>Export backup</span><span class="list-val">›</span></div>
+            <div class="list-row danger" onclick="resetAll()"><span>Reset all data</span><span class="list-val">›</span></div>
+        </div>
+
+        <div class="version-tag">FORGE v2.0</div>
+    </section>
+
+</div>
+
+<!-- ============ BOTTOM NAV ============ -->
+<nav class="bottom-nav" id="bottomNav">
+    <button class="nav-tab active" data-screen="home" onclick="go('home')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5L12 3l9 7.5M5 9.5V20h14V9.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Home</span>
+    </button>
+    <button class="nav-tab" data-screen="gym" onclick="go('gym')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.5 6.5L17.5 17.5M4 12l-2 2M20 12l2-2M7 7L5 5M17 17l2 2" stroke-linecap="round"/></svg>
+        <span>Gym</span>
+    </button>
+    <button class="nav-tab" data-screen="run" onclick="go('run')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 4a1.5 1.5 0 100 3 1.5 1.5 0 000-3zM8 9l3-1 2 2 1 4M11 10l-2 5-3 3M14 13l3 1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Run</span>
+    </button>
+    <button class="nav-tab" data-screen="progress" onclick="go('progress')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16M8 16l3-4 3 2 4-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Progress</span>
+    </button>
+    <button class="nav-tab" data-screen="profile" onclick="go('profile')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" stroke-linecap="round"/></svg>
+        <span>Profile</span>
+    </button>
+</nav>
+
+<!-- ============ SHEET (bottom modal) ============ -->
+<div class="sheet-backdrop" id="sheetBackdrop" onclick="if(event.target===this)closeSheet()">
+    <div class="sheet" id="sheet">
+        <div class="sheet-handle"></div>
+        <div id="sheetContent"></div>
+    </div>
+</div>
+
+<!-- ============ TOAST ============ -->
+<div class="toast-host" id="toastHost"></div>
+
+<!-- ============ REST TIMER OVERLAY ============ -->
+<div class="rest-overlay" id="restOverlay">
+    <div class="rest-ring-wrap">
+        <svg class="rest-ring" viewBox="0 0 200 200">
+            <circle class="rest-ring-bg" cx="100" cy="100" r="90"/>
+            <circle class="rest-ring-fg" id="restRingFg" cx="100" cy="100" r="90"/>
+        </svg>
+        <div class="rest-time" id="restTime">1:30</div>
+    </div>
+    <div class="rest-controls">
+        <button class="btn-ghost" onclick="adjustRest(-15)">−15s</button>
+        <button class="btn-ghost" onclick="adjustRest(15)">+15s</button>
+    </div>
+    <button class="btn-primary" onclick="skipRest()">Skip rest</button>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
