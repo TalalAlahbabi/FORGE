@@ -95,17 +95,36 @@
             <button class="btn-ghost" onclick="openPlanPicker()">Change</button>
         </div>
 
-        <!-- Today's workout / day picker -->
-        <div class="section-label">Choose your day</div>
-        <div id="gymDayList"></div>
+        <!-- Today's scheduled item -->
+        <div id="gymTodayBox"></div>
+
+        <!-- Schedule preview -->
+        <div class="section-label">
+            Your schedule
+            <button class="btn-ghost sm" style="float:right" onclick="go('schedule')">Edit</button>
+        </div>
+        <div id="gymSchedPreview"></div>
+
+        <div class="section-label">Manage</div>
+        <div class="quick-row">
+            <button class="quick-btn" onclick="go('plans')">
+                <span class="quick-ico">≣</span> Plans
+            </button>
+            <button class="quick-btn" onclick="go('schedule')">
+                <span class="quick-ico">📅</span> Schedule
+            </button>
+            <button class="quick-btn" onclick="go('history')">
+                <span class="quick-ico">⏱</span> History
+            </button>
+        </div>
 
         <div class="section-label">Quick actions</div>
         <div class="quick-row">
             <button class="quick-btn" onclick="repeatLastWorkout()">
                 <span class="quick-ico">⟳</span> Repeat last
             </button>
-            <button class="quick-btn" onclick="go('history')">
-                <span class="quick-ico">≣</span> History
+            <button class="quick-btn" onclick="skipScheduleSlot()">
+                <span class="quick-ico">→</span> Skip day
             </button>
             <button class="quick-btn" onclick="openPaceFromGym()">
                 <span class="quick-ico">★</span> Records
@@ -231,6 +250,67 @@
                 <div id="prMileageChart"></div>
             </div>
         </div>
+    </section>
+
+    <!-- ===== SCHEDULE (rotating sequence) ===== -->
+    <section class="screen" id="screen-schedule">
+        <header class="screen-head">
+            <button class="back-btn" onclick="go('gym')">‹ Gym</button>
+            <div><h1 class="screen-title">Schedule</h1></div>
+        </header>
+        <div class="card schedule-info">
+            <div class="card-meta">Your rotating sequence</div>
+            <div class="schedule-info-sub">When you finish a session, the app moves to the next day automatically.</div>
+        </div>
+        <div id="scheduleList"></div>
+        <div class="schedule-actions">
+            <button class="btn-ghost" onclick="openAddSlot()">+ Add day</button>
+            <button class="btn-ghost" onclick="resetSchedule()">Reset</button>
+        </div>
+    </section>
+
+    <!-- ===== MANAGE PLANS ===== -->
+    <section class="screen" id="screen-plans">
+        <header class="screen-head">
+            <button class="back-btn" onclick="go('gym')">‹ Gym</button>
+            <div><h1 class="screen-title">Plans</h1></div>
+        </header>
+        <div id="plansList"></div>
+        <button class="btn-primary full" style="margin-top:14px" onclick="createNewPlan()">+ New plan</button>
+    </section>
+
+    <!-- ===== EDIT PLAN ===== -->
+    <section class="screen" id="screen-edit-plan">
+        <header class="screen-head">
+            <button class="back-btn" onclick="go('plans')">‹ Plans</button>
+            <div><h1 class="screen-title" id="editPlanTitle">Edit plan</h1></div>
+        </header>
+        <div class="card">
+            <div class="field"><label>Plan name</label><input type="text" id="editPlanName" onchange="updatePlanName()"></div>
+            <div class="field"><label>Description</label><input type="text" id="editPlanDesc" onchange="updatePlanDesc()"></div>
+        </div>
+        <div class="section-label">Workout days</div>
+        <div id="editPlanDays"></div>
+        <button class="btn-ghost" style="width:100%;margin-top:10px" onclick="addDayToPlan()">+ Add day</button>
+        <div class="section-label">Actions</div>
+        <div class="card list-card">
+            <div class="list-row" id="resetPlanRow" onclick="resetPlanToDefault()" style="display:none"><span>Reset to default</span><span class="list-val">›</span></div>
+            <div class="list-row danger" id="deletePlanRow" onclick="deletePlan()" style="display:none"><span>Delete plan</span><span class="list-val">›</span></div>
+        </div>
+    </section>
+
+    <!-- ===== EDIT DAY ===== -->
+    <section class="screen" id="screen-edit-day">
+        <header class="screen-head">
+            <button class="back-btn" onclick="go('edit-plan')">‹ Plan</button>
+            <div><h1 class="screen-title" id="editDayTitle">Edit day</h1></div>
+        </header>
+        <div class="card">
+            <div class="field"><label>Day name</label><input type="text" id="editDayName" onchange="updateDayName()"></div>
+        </div>
+        <div class="section-label">Exercises</div>
+        <div id="editDayExercises"></div>
+        <button class="btn-ghost" style="width:100%;margin-top:10px" onclick="addExerciseToDay()">+ Add exercise</button>
     </section>
 
     <!-- ===== HISTORY ===== -->
