@@ -568,14 +568,43 @@ function renderWorkout() {
     if (!activeWorkout) return
     document.getElementById("workoutDayName").textContent = activeWorkout.day
 
+    // Determine current exercise (first one with unfinished sets)
+    const currentExIdx = findCurrentExerciseIdx()
+
     const body = document.getElementById("workoutBody")
     body.innerHTML = activeWorkout.exercises.map((ex, ei) => {
         const allDone = ex.sets.every(s => s.done)
-        let warmup = ""
-        if (profile.warmup && ei === 0 && ex.sets[0].weight) {
-            warmup = `<div class="ex-warmup">🔥 Warmup: empty bar × 10, then ${fmt(ex.sets[0].weight*0.5)}kg × 5, ${fmt(ex.sets[0].weight*0.7)}kg × 3</div>`
+        const isCurrent = ei === currentExIdx
+        const isExpanded = isCurrent || ex._expanded === true
+
+        // COLLAPSED state: completed (or upcoming) exercises shown as compact card
+        if (!isExpanded) {
+            const doneCount = ex.sets.filter(s => s.done).length
+            const summary = allDone
+                ? ex.sets.map(s => s.reps).join(',')
+                : `${doneCount}/${ex.sets.length} sets done`
+            const topWeight = allDone ? `${fmt(ex.sets[0].weight)}kg × ${summary}` : summary
+            return `<div class="ex-block collapsed ${allDone?'all-done':'upcoming'}" onclick="expandExercise(${ei})">
+                <div class="ex-collapsed-row">
+                    <div class="ex-collapsed-check">${allDone?'✓':''}</div>
+                    <div class="ex-collapsed-info">
+                        <div class="ex-collapsed-name">${ex.name}</div>
+                        <div class="ex-collapsed-sub">${topWeight}</div>
+                    </div>
+                    <div class="ex-collapsed-go">›</div>
+                </div>
+            </div>`
         }
-        return `<div class="ex-block ${allDone?'done':''}" id="exblock-${ei}">
+
+        // EXPANDED state
+        let warmup = ""
+        const firstUndoneSet = ex.sets.find(s => !s.done)
+        const firstSetWeight = firstUndoneSet ? (firstUndoneSet.weight || ex.sets[0].weight) : ex.sets[0].weight
+        if (profile.warmup && isCurrent && firstSetWeight && !ex.sets.some(s => s.done)) {
+            warmup = `<div class="ex-warmup">🔥 Warmup: empty bar × 10, then ${fmt(firstSetWeight*0.5)}kg × 5, ${fmt(firstSetWeight*0.7)}kg × 3</div>`
+        }
+
+        return `<div class="ex-block expanded" id="exblock-${ei}">
             <div class="ex-block-head">
                 <div class="ex-block-name">${ex.name}</div>
                 <div class="ex-block-target">${ex.targetSets}×${ex.target}</div>
@@ -584,7 +613,7 @@ function renderWorkout() {
             ${warmup}
             <div class="set-labels"><span>Set</span><span>kg</span><span>Reps</span><span></span></div>
             <div id="sets-${ei}">
-                ${ex.sets.map((s, si) => setRowHtml(ei, si, s)).join("")}
+                ${ex.sets.map((s, si) => setRowHtml(ei, si, s, ex)).join("")}
             </div>
             <button class="add-set-btn" onclick="addSet(${ei})">+ Add set</button>
         </div>`
@@ -593,13 +622,65 @@ function renderWorkout() {
     updateWorkoutProgress()
 }
 
-function setRowHtml(ei, si, s) {
+function findCurrentExerciseIdx() {
+    // First exercise with any undone sets
+    for (let i = 0; i < activeWorkout.exercises.length; i++) {
+        if (activeWorkout.exercises[i].sets.some(s => !s.done)) return i
+    }
+    // All done — return last index so it stays expanded
+    return activeWorkout.exercises.length - 1
+}
+
+function expandExercise(ei) {
+    // Mark this exercise as manually expanded; collapse currently-expanded ones except this
+    activeWorkout.exercises.forEach((ex, i) => {
+        if (i === ei) ex._expanded = true
+        else delete ex._expanded
+    })
+    renderWorkout()
+    // Scroll to it
+    setTimeout(() => {
+        const el = document.getElementById(`exblock-${ei}`)
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+}
+
+function setRowHtml(ei, si, s, ex) {
+    // Find the most-recent done set in this exercise (for prefill)
+    const prevDoneInThis = (() => {
+        for (let i = si - 1; i >= 0; i--) {
+            if (ex.sets[i].done) return ex.sets[i]
+        }
+        return null
+    })()
+
+    // DONE state: compact display, tap to re-edit
+    if (s.done) {
+        return `<div class="set-row done" onclick="reopenSet(${ei},${si})">
+            <div class="set-num">${si+1}</div>
+            <div class="set-result">${fmt(s.weight)}<span class="unit">kg</span></div>
+            <div class="set-result">${s.reps}<span class="unit">reps</span></div>
+            <button class="set-check checked" onclick="event.stopPropagation();reopenSet(${ei},${si})">✓</button>
+        </div>`
+    }
+
+    // ACTIVE state: prefilled placeholders from previous set in this exercise (or last workout)
+    const placeholderWeight = prevDoneInThis ? prevDoneInThis.weight :
+                              (ex.prev ? ex.prev.weight : (s.weight || ''))
+    const placeholderReps = prevDoneInThis ? prevDoneInThis.reps :
+                            (ex.prev ? ex.prev.reps : '')
+
     return `<div class="set-row">
         <div class="set-num">${si+1}</div>
-        <input type="number" inputmode="decimal" placeholder="${s.weight||'0'}" value="${s.weight!==''&&!s.done?s.weight:(s.done?s.weight:'')}" onchange="updateSet(${ei},${si},'weight',this.value)">
-        <input type="number" inputmode="numeric" placeholder="0" value="${s.reps!==''?s.reps:''}" onchange="updateSet(${ei},${si},'reps',this.value)">
-        <button class="set-check ${s.done?'checked':''}" onclick="toggleSet(${ei},${si})">✓</button>
+        <input type="number" inputmode="decimal" placeholder="${placeholderWeight}" value="${s.weight!==''?s.weight:''}" onchange="updateSet(${ei},${si},'weight',this.value)" onfocus="this.select()">
+        <input type="number" inputmode="numeric" placeholder="${placeholderReps}" value="${s.reps!==''?s.reps:''}" onchange="updateSet(${ei},${si},'reps',this.value)" onfocus="this.select()">
+        <button class="set-check" onclick="toggleSet(${ei},${si})">✓</button>
     </div>`
+}
+
+function reopenSet(ei, si) {
+    activeWorkout.exercises[ei].sets[si].done = false
+    renderWorkout()
 }
 
 function updateSet(ei, si, field, val) {
@@ -608,23 +689,53 @@ function updateSet(ei, si, field, val) {
 
 function toggleSet(ei, si) {
     const set = activeWorkout.exercises[ei].sets[si]
-    // grab current input values
+    const ex = activeWorkout.exercises[ei]
+    // Find the row's inputs
     const row = document.querySelectorAll(`#sets-${ei} .set-row`)[si]
+    if (!row) return
     const inputs = row.querySelectorAll("input")
-    set.weight = inputs[0].value || set.weight || inputs[0].placeholder
-    set.reps = inputs[1].value || set.reps
-    set.done = !set.done
+    if (!inputs || inputs.length < 2) return
 
-    if (set.done && !set.reps) {
-        toast("Enter reps first", "warn")
-        set.done = false
+    // CRUCIAL: use typed value OR placeholder (so one tap on ✓ logs the suggested values)
+    const typedW = inputs[0].value
+    const typedR = inputs[1].value
+    set.weight = typedW !== "" ? typedW : (inputs[0].placeholder || set.weight)
+    set.reps = typedR !== "" ? typedR : (inputs[1].placeholder || set.reps)
+
+    // Validate
+    if (!set.reps || !parseInt(set.reps)) {
+        toast("Enter reps", "warn")
         return
+    }
+    if (!set.weight || isNaN(parseFloat(set.weight))) {
+        toast("Enter weight", "warn")
+        return
+    }
+
+    set.done = true
+
+    // Auto-collapse the previously-current exercise if all sets in it are now done
+    // and there are more exercises after it
+    const wasLastSet = ex.sets.every(s => s.done)
+    if (wasLastSet) {
+        delete ex._expanded
     }
 
     renderWorkout()
 
-    // auto rest timer
-    if (set.done && profile.autoRest) {
+    // Scroll to next active exercise smoothly
+    if (wasLastSet) {
+        setTimeout(() => {
+            const nextIdx = findCurrentExerciseIdx()
+            if (nextIdx !== null && nextIdx > ei) {
+                const el = document.getElementById(`exblock-${nextIdx}`)
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }
+        }, 100)
+    }
+
+    // Auto rest timer (now as floating pill)
+    if (profile.autoRest) {
         startRest(profile.rest || 90)
     }
 }
@@ -723,7 +834,9 @@ let restTotal = 0
 function startRest(seconds) {
     restRemaining = seconds
     restTotal = seconds
-    document.getElementById("restOverlay").classList.add("active")
+    // Default: floating pill (non-blocking)
+    document.getElementById("restPill").classList.add("active")
+    // Don't auto-open fullscreen
     updateRestDisplay()
     clearInterval(restInterval)
     restInterval = setInterval(() => {
@@ -731,7 +844,6 @@ function startRest(seconds) {
         updateRestDisplay()
         if (restRemaining <= 0) {
             skipRest()
-            // subtle vibration if available
             if (navigator.vibrate) navigator.vibrate(200)
         }
     }, 1000)
@@ -739,11 +851,25 @@ function startRest(seconds) {
 
 function updateRestDisplay() {
     const m = Math.floor(restRemaining / 60), s = restRemaining % 60
-    document.getElementById("restTime").textContent = `${m}:${String(s).padStart(2,'0')}`
-    const circ = 565.48
-    const ring = document.getElementById("restRingFg")
+    const timeStr = `${m}:${String(s).padStart(2,'0')}`
+
+    // Update both pill + fullscreen displays
+    const tEl = document.getElementById("restTime"); if (tEl) tEl.textContent = timeStr
+    const pTEl = document.getElementById("restPillTime"); if (pTEl) pTEl.textContent = timeStr
+
     const pct = restTotal ? restRemaining / restTotal : 0
-    ring.style.strokeDashoffset = circ * (1 - pct)
+
+    // Fullscreen ring (circumference 565.48 for r=90)
+    const fsRing = document.getElementById("restRingFg")
+    if (fsRing) fsRing.style.strokeDashoffset = 565.48 * (1 - pct)
+
+    // Pill ring (circumference ~100.5 for r=16)
+    const pillRing = document.getElementById("restPillFg")
+    if (pillRing) {
+        const c = 2 * Math.PI * 16
+        pillRing.style.strokeDasharray = c.toFixed(2)
+        pillRing.style.strokeDashoffset = (c * (1 - pct)).toFixed(2)
+    }
 }
 
 function adjustRest(delta) {
@@ -754,6 +880,15 @@ function adjustRest(delta) {
 
 function skipRest() {
     clearInterval(restInterval)
+    document.getElementById("restOverlay").classList.remove("active")
+    document.getElementById("restPill").classList.remove("active")
+}
+
+function expandRestOverlay() {
+    document.getElementById("restOverlay").classList.add("active")
+}
+
+function collapseRestOverlay() {
     document.getElementById("restOverlay").classList.remove("active")
 }
 

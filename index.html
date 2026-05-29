@@ -412,8 +412,22 @@
 <!-- ============ TOAST ============ -->
 <div class="toast-host" id="toastHost"></div>
 
-<!-- ============ REST TIMER OVERLAY ============ -->
-<div class="rest-overlay" id="restOverlay">
+<!-- ============ REST TIMER (floating pill - default; fullscreen expandable) ============ -->
+<div class="rest-pill" id="restPill" onclick="expandRestOverlay()">
+    <svg class="rest-pill-ring" viewBox="0 0 36 36">
+        <circle class="rest-pill-bg" cx="18" cy="18" r="16"/>
+        <circle class="rest-pill-fg" id="restPillFg" cx="18" cy="18" r="16"/>
+    </svg>
+    <div class="rest-pill-time" id="restPillTime">1:30</div>
+    <div class="rest-pill-actions" onclick="event.stopPropagation()">
+        <button onclick="adjustRest(-15)" title="−15s">−</button>
+        <button onclick="adjustRest(15)" title="+15s">+</button>
+        <button onclick="skipRest()" title="Skip">✕</button>
+    </div>
+</div>
+
+<div class="rest-overlay" id="restOverlay" onclick="if(event.target===this)collapseRestOverlay()">
+    <button class="rest-collapse-btn" onclick="collapseRestOverlay()">⌄</button>
     <div class="rest-ring-wrap">
         <svg class="rest-ring" viewBox="0 0 200 200">
             <circle class="rest-ring-bg" cx="100" cy="100" r="90"/>
