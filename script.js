@@ -490,7 +490,7 @@ function startTodayGym() {
 // ============ PLAN PICKER ============
 function openPlanPicker() {
     let html = `<div class="sheet-title">Choose a plan</div><div class="sheet-sub">Pick the split that fits your schedule.</div>`
-    html += Object.entries(PLANS).map(([name, p]) => `
+    html += Object.entries(plans).map(([name, p]) => `
         <div class="plan-option ${selectedPlan===name?'selected':''}" onclick="pickPlan('${name.replace(/'/g,"\\'")}')">
             <div class="plan-option-name">${name}</div>
             <div class="plan-option-desc">${p.desc}</div>
