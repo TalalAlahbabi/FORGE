@@ -2,7 +2,7 @@
    FORGE Service Worker — offline-first, auto-update
    ========================================================= */
 
-const CACHE_VERSION = "forge-v2.4.0"
+const CACHE_VERSION = "forge-v2.4.1"
 const CACHE_NAME = `forge-cache-${CACHE_VERSION}`
 
 // Core files to cache on install — relative paths so it works under any subdirectory
