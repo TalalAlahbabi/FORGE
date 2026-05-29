@@ -313,6 +313,19 @@
         <button class="btn-ghost" style="width:100%;margin-top:10px" onclick="addExerciseToDay()">+ Add exercise</button>
     </section>
 
+    <!-- ===== BADGES ===== -->
+    <section class="screen" id="screen-badges">
+        <header class="screen-head">
+            <button class="back-btn" onclick="go('profile')">‹ Profile</button>
+            <div><h1 class="screen-title">Badges</h1></div>
+        </header>
+        <div class="card badges-stat-card">
+            <div class="badges-stat-title" id="badgesStatTitle">0 / 50</div>
+            <div class="badges-stat-sub">badges unlocked</div>
+        </div>
+        <div id="badgesList"></div>
+    </section>
+
     <!-- ===== HISTORY ===== -->
     <section class="screen" id="screen-history">
         <header class="screen-head">
@@ -354,6 +367,14 @@
             <div class="list-row">
                 <span>Warmup suggestions</span>
                 <label class="switch"><input type="checkbox" id="warmupPref" checked onchange="saveProfileFields()"><span class="slider"></span></label>
+            </div>
+        </div>
+
+        <div class="section-label">Achievements</div>
+        <div class="card list-card">
+            <div class="list-row" onclick="go('badges')">
+                <span>🎖 Badges</span>
+                <span class="list-val" id="profileBadgesCount">›</span>
             </div>
         </div>
 
@@ -440,6 +461,16 @@
         <button class="btn-ghost" onclick="adjustRest(15)">+15s</button>
     </div>
     <button class="btn-primary" onclick="skipRest()">Skip rest</button>
+</div>
+
+<!-- ============ PR CELEBRATION OVERLAY ============ -->
+<div class="pr-celeb-overlay" id="prCelebration">
+    <div class="confetti-host" id="confettiHost"></div>
+    <div class="pr-celeb-card">
+        <div class="pr-celeb-trophy">🏆</div>
+        <div id="prCelebBody"></div>
+        <button class="btn-primary full" style="margin-top:24px" onclick="closePRCelebration()">Continue</button>
+    </div>
 </div>
 
 <script src="script.js"></script>
