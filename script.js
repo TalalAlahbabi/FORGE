@@ -10,7 +10,7 @@ let selectedPlan = JSON.parse(localStorage.getItem("forge_plan") || "null")
 let profile      = JSON.parse(localStorage.getItem("forge_profile") || "null") || {
     name: "", weight: null, rest: 90, autoRest: true, warmup: true
 }
-let theme = localStorage.getItem("forge_theme") || "dark"
+let theme = localStorage.getItem("forge_theme") || "light"
 
 // ============ GYM PLANS (4 built-in defaults, used for reset) ============
 const DEFAULT_PLANS = {
